@@ -22,6 +22,7 @@ from pynput import keyboard as kb
 
 import config as cfg
 from assist_client import list_input_devices, list_output_devices, test_credentials
+from wake import WAKE_WORDS
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -708,6 +709,42 @@ class SettingsDialog:
                      tip="Which Home Assistant voice pipeline (assistant) to use. "
                          "'Preferred' follows your Home Assistant default.")
 
+        # --- Wake word ---
+        self._section(body, "WAKE WORD")
+        wr = ctk.CTkFrame(body, fg_color="transparent")
+        wr.pack(fill="x", pady=4)
+        wlbl = ctk.CTkLabel(wr, text="Enable", text_color=S_MUTED, width=self.LABEL_W, anchor="w",
+                            font=("Segoe UI", 12))
+        wlbl.pack(side="left")
+        self.wake_var = tk.BooleanVar(value=config.wake_enabled)
+        sw = ctk.CTkSwitch(wr, text="", variable=self.wake_var, onvalue=True, offvalue=False,
+                           width=44, progress_color=S_ACCENT, button_color=S_FG, fg_color=S_HOVER)
+        sw.pack(side="left")
+        _wake_tip = ("Also listen for a spoken wake word (like 'Hey Jarvis') — no key needed. "
+                     "Runs locally with openWakeWord; downloads a small model on first enable. "
+                     "Home Assistant's own voice detection ends each command.")
+        for _w in (wlbl, sw):
+            _Tooltip(_w, _wake_tip)
+
+        self.wakeword_map = [(label, name) for name, label in WAKE_WORDS]
+        self.wakeword_var = tk.StringVar()
+        self._option(body, "Wake word", self.wakeword_map, config.wake_word, self.wakeword_var,
+                     tip="Which wake word to listen for.")
+
+        sr = ctk.CTkFrame(body, fg_color="transparent")
+        sr.pack(fill="x", pady=4)
+        ctk.CTkLabel(sr, text="Sensitivity", text_color=S_MUTED, width=self.LABEL_W, anchor="w",
+                     font=("Segoe UI", 12)).pack(side="left")
+        self.sens_var = tk.DoubleVar(value=config.wake_sensitivity)
+        sens = ctk.CTkSlider(sr, from_=0.2, to=0.9, number_of_steps=14, variable=self.sens_var,
+                             command=self._on_sens, progress_color=S_ACCENT, button_color=S_ACCENT,
+                             button_hover_color=S_ACCENT)
+        sens.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.sens_label = ctk.CTkLabel(sr, text=f"{config.wake_sensitivity:.2f}", text_color=S_FG,
+                                       width=32, font=("Segoe UI", 12))
+        self.sens_label.pack(side="left")
+        _Tooltip(sens, "Higher = stricter (fewer false triggers, but you must say it more clearly).")
+
         # --- Popup ---
         self._section(body, "POPUP")
         dr = ctk.CTkFrame(body, fg_color="transparent")
@@ -783,6 +820,9 @@ class SettingsDialog:
     def _on_dismiss(self, value):
         self.dismiss_label.configure(text=f"{int(float(value))}s")
 
+    def _on_sens(self, value):
+        self.sens_label.configure(text=f"{float(value):.2f}")
+
     def _test(self):
         url, token = self.url_var.get(), self.token_var.get()
         self.test_result.configure(text="Testing…", text_color=S_MUTED)
@@ -833,6 +873,9 @@ class SettingsDialog:
         self.config.mic_device = self._value_for(self.mic_map, self.mic_var)
         self.config.speaker_device = self._value_for(self.spk_map, self.spk_var)
         self.config.pipeline = self._value_for(self.pipe_map, self.pipe_var)
+        self.config.wake_enabled = bool(self.wake_var.get())
+        self.config.wake_word = self._value_for(self.wakeword_map, self.wakeword_var) or "hey_jarvis"
+        self.config.wake_sensitivity = round(float(self.sens_var.get()), 2)
         self.config.dismiss_seconds = float(max(2, int(self.dismiss_var.get())))
         self.config.save()
         self.on_save()
