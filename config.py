@@ -61,7 +61,8 @@ class Config:
     mic_device: int | None = None          # sounddevice index; None = default
     speaker_device: int | None = None      # sounddevice index; None = default
     pipeline: str | None = None            # HA pipeline id; None = preferred
-    dismiss_seconds: float = 6.0           # how long the toast lingers after a reply
+    dismiss_seconds: float = 2.0           # seconds the popup lingers AFTER the reply is spoken
+    popup_monitor: str = "primary"         # "primary" | "cursor" | monitor index ("0", "1", …)
 
     @property
     def hotkey_set(self) -> frozenset[str]:
@@ -101,5 +102,6 @@ class Config:
             "speaker_device": self.speaker_device,
             "pipeline": self.pipeline,
             "dismiss_seconds": self.dismiss_seconds,
+            "popup_monitor": self.popup_monitor,
         }
         CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")

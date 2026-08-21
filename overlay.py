@@ -64,6 +64,40 @@ def monitor_workarea_at(x: int, y: int):
         return None
 
 
+def list_monitors():
+    """All monitors as dicts {primary: bool, work: (l, t, r, b)}, in enum order."""
+    result = []
+    try:
+        user32 = ctypes.windll.user32
+        proc = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+                                  ctypes.POINTER(wintypes.RECT), ctypes.c_void_p)
+
+        def _cb(hmon, _hdc, _lprc, _lparam):
+            mi = _MONITORINFO()
+            mi.cbSize = ctypes.sizeof(_MONITORINFO)
+            if user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+                w = mi.rcWork
+                result.append({"primary": bool(mi.dwFlags & 1),
+                               "work": (w.left, w.top, w.right, w.bottom)})
+            return 1
+
+        user32.EnumDisplayMonitors(None, None, proc(_cb), 0)
+    except Exception:  # noqa: BLE001
+        pass
+    return result
+
+
+def primary_workarea():
+    for m in list_monitors():
+        if m["primary"]:
+            return m["work"]
+    try:
+        gsm = ctypes.windll.user32.GetSystemMetrics
+        return (0, 0, gsm(0), gsm(1) - 48)
+    except Exception:  # noqa: BLE001
+        return (0, 0, 1920, 1032)
+
+
 MAGIC = "#ff00ff"          # transparent knock-out colour for rounded corners
 CARD = "#20242f"           # slightly warmer/softer card
 BORDER = "#333a4d"
@@ -428,11 +462,20 @@ class Overlay:
     # ---- geometry -----------------------------------------------------------
 
     def _compute_area(self):
-        px, py = self.win.winfo_pointerxy()
-        area = monitor_workarea_at(px, py)
-        if area:
-            return area
-        return (0, 0, self.win.winfo_screenwidth(), self.win.winfo_screenheight() - 48)
+        pref = getattr(self.config, "popup_monitor", "primary")
+        if pref == "cursor":
+            area = monitor_workarea_at(*self.win.winfo_pointerxy())
+            if area:
+                return area
+        elif pref not in ("primary", "cursor"):
+            mons = list_monitors()
+            try:
+                idx = int(pref)
+                if 0 <= idx < len(mons):
+                    return mons[idx]["work"]
+            except (ValueError, TypeError):
+                pass
+        return primary_workarea()  # default + fallback: the main monitor
 
     def _rest_y(self):
         _, _, _, bottom = self._area
@@ -794,6 +837,16 @@ class SettingsDialog:
 
         # --- Popup ---
         self._section(body, "POPUP")
+        self.screen_map = [("Main monitor", "primary"), ("Follow mouse", "cursor")]
+        for i, m in enumerate(list_monitors()):
+            w = m["work"]
+            label = f"Monitor {i + 1} ({w[2] - w[0]}×{w[3] - w[1]})" + (" — main" if m["primary"] else "")
+            self.screen_map.append((label, str(i)))
+        self.screen_var = tk.StringVar()
+        self._option(body, "Screen", self.screen_map, config.popup_monitor, self.screen_var,
+                     tip="Which monitor the popups appear on. 'Main monitor' is your primary "
+                         "display; 'Follow mouse' uses whichever screen your cursor is on.")
+
         dr = ctk.CTkFrame(body, fg_color="transparent")
         dr.pack(fill="x", pady=4)
         ctk.CTkLabel(dr, text="Dismiss after", text_color=S_MUTED, width=self.LABEL_W, anchor="w",
@@ -806,7 +859,7 @@ class SettingsDialog:
         self.dismiss_label = ctk.CTkLabel(dr, text=f"{int(config.dismiss_seconds)}s",
                                           text_color=S_FG, width=28, font=("Segoe UI", 12))
         self.dismiss_label.pack(side="left")
-        _Tooltip(slider, "How many seconds a reply popup stays on screen before it slides away.")
+        _Tooltip(slider, "How many seconds the popup stays after the reply finishes being spoken.")
 
         # --- Buttons ---
         br = ctk.CTkFrame(body, fg_color="transparent")
@@ -923,6 +976,7 @@ class SettingsDialog:
         self.config.wake_enabled = bool(self.wake_var.get())
         self.config.wake_word = self._value_for(self.wakeword_map, self.wakeword_var) or "hey_jarvis"
         self.config.wake_sensitivity = round(float(self.sens_var.get()), 2)
+        self.config.popup_monitor = self._value_for(self.screen_map, self.screen_var) or "primary"
         self.config.dismiss_seconds = float(max(2, int(self.dismiss_var.get())))
         self.config.save()
         self.on_save()
