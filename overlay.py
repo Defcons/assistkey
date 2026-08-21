@@ -542,6 +542,77 @@ class _Tooltip:
             self.tip = None
 
 
+class _Dropdown(ctk.CTkFrame):
+    """A dark, rounded dropdown that matches the field width (native menus force a
+    white OS border and can't be aligned/left-justified, so we roll our own)."""
+
+    def __init__(self, master, values, variable):
+        super().__init__(master, fg_color=S_FIELD, corner_radius=10, height=34)
+        self.pack_propagate(False)
+        self._values = list(values)
+        self._var = variable
+        self._menu = None
+        self._label = ctk.CTkLabel(self, textvariable=variable, anchor="w",
+                                   text_color=S_FG, font=("Segoe UI", 12))
+        self._label.pack(side="left", fill="x", expand=True, padx=(12, 0))
+        self._arrow = ctk.CTkLabel(self, text="▾", text_color=S_MUTED, width=18, font=("Segoe UI", 12))
+        self._arrow.pack(side="right", padx=(0, 10))
+        for w in (self, self._label, self._arrow):
+            w.bind("<Button-1>", self._toggle)
+
+    def _toggle(self, _e=None):
+        self._close() if self._menu is not None else self._open()
+
+    def _open(self):
+        self.update_idletasks()
+        fx, fy, fw, fh = (self.winfo_rootx(), self.winfo_rooty(),
+                          self.winfo_width(), self.winfo_height())
+        self._menu = tk.Toplevel(self)
+        self._menu.overrideredirect(True)
+        self._menu.attributes("-topmost", True)
+        self._menu.configure(bg=S_BG)
+        frame = ctk.CTkFrame(self._menu, fg_color=S_FIELD, corner_radius=10,
+                             border_width=1, border_color=S_HOVER)
+        frame.pack(fill="both", expand=True)
+        for val in self._values:
+            ctk.CTkButton(frame, text=val, anchor="w", fg_color="transparent",
+                          hover_color=S_HOVER, text_color=S_FG, corner_radius=6, height=30,
+                          font=("Segoe UI", 12), command=lambda v=val: self._select(v)).pack(
+                          fill="x", padx=4, pady=2)
+        self._menu.update_idletasks()
+        mh = self._menu.winfo_reqheight()
+        self._menu.geometry(f"{fw}x{mh}+{fx}+{fy + fh + 3}")  # match field width, sit under it
+        self._arrow.configure(text="▴")
+        self._menu.grab_set()  # route outside clicks here so we can dismiss
+        self._menu.bind("<Button-1>", self._click_out, add="+")
+
+    def _click_out(self, e):
+        m = self._menu
+        if m is None:
+            return
+        inside = (m.winfo_rootx() <= e.x_root <= m.winfo_rootx() + m.winfo_width()
+                  and m.winfo_rooty() <= e.y_root <= m.winfo_rooty() + m.winfo_height())
+        if not inside:
+            self._close()
+
+    def _select(self, v):
+        self._var.set(v)
+        self._close()
+
+    def _close(self):
+        if self._menu is not None:
+            try:
+                self._menu.grab_release()
+                self._menu.destroy()
+            except tk.TclError:
+                pass
+            self._menu = None
+        try:
+            self._arrow.configure(text="▾")
+        except tk.TclError:
+            pass
+
+
 class SettingsDialog:
     """Modern rounded settings dialog (customtkinter) with a dark title bar."""
 
@@ -701,12 +772,9 @@ class SettingsDialog:
                            font=("Segoe UI", 12))
         lbl.pack(side="left")
         values = [lbl_ for lbl_, _ in mapping]
-        menu = ctk.CTkOptionMenu(r, values=values, variable=var, corner_radius=10, height=34,
-                                 fg_color=S_FIELD, button_color=S_FIELD, button_hover_color=S_HOVER,
-                                 text_color=S_FG, dropdown_fg_color=S_FIELD, dropdown_text_color=S_FG,
-                                 dropdown_hover_color=S_ACCENT, font=("Segoe UI", 12))
-        menu.pack(side="left", fill="x", expand=True)
         var.set(next((lbl_ for lbl_, val in mapping if val == current), values[0] if values else ""))
+        dd = _Dropdown(r, values, var)
+        dd.pack(side="left", fill="x", expand=True)
         if tip:
             _Tooltip(lbl, tip)
 
