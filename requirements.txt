@@ -1,0 +1,8 @@
+websockets>=15
+sounddevice>=0.5
+numpy>=2
+pynput>=1.7
+miniaudio>=1.6
+pystray>=0.19
+Pillow>=10
+customtkinter>=5.2
