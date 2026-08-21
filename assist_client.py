@@ -130,6 +130,14 @@ class AssistClient:
             except Exception:  # noqa: BLE001
                 pass
 
+    def active_pipeline_name(self) -> str:
+        """The name of the pipeline in use (whatever the user named it in HA)."""
+        pid = self.config.pipeline or self.preferred_pipeline
+        for p in self.pipelines:
+            if p["id"] == pid:
+                return p.get("name") or "Assistant"
+        return "Assistant"
+
     async def connect(self):
         url, token = self.config.credentials()
         if not (url and token):
@@ -227,6 +235,7 @@ class AssistClient:
             self.ui(("error", f"Mic error: {exc}"))
             return
 
+        self.ui(("assistant", self.active_pipeline_name()))
         self.ui(("listening",))
 
         msg_id = self.next_id()

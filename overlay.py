@@ -136,6 +136,7 @@ class Overlay:
         self._target = HIDDEN
         self._user_text = ""
         self._response = ""
+        self._assistant = "Assistant"  # reply label — set from the HA pipeline name
         self._dots = 0
         self._pulse = 0
         self._h = 0
@@ -165,6 +166,9 @@ class Overlay:
     def thinking(self):
         self._touch()
         self._enter(THINKING)
+
+    def set_assistant(self, name: str):
+        self._assistant = (name or "Assistant").strip() or "Assistant"
 
     def set_user_text(self, text: str):
         self._user_text = (text or "").strip()
@@ -347,7 +351,8 @@ class Overlay:
                                      font=FONT_USER, width=WIDTH - 2 * PAD, justify="center")
                 y = c.bbox(item)[3]
         elif st == RESPONSE:
-            c.create_text(WIDTH / 2, y, anchor="n", text="JARVIS", fill=ACCENT, font=FONT_LABEL)
+            c.create_text(WIDTH / 2, y, anchor="n", text=self._assistant.upper(),
+                          fill=ACCENT, font=FONT_LABEL)
             y += 22
             item = c.create_text(WIDTH / 2, y, anchor="n", text=self._response or "…",
                                  fill=TEXT, font=FONT_BODY, width=WIDTH - 2 * PAD, justify="center")
