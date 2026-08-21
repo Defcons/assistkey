@@ -17,6 +17,10 @@ is spoken aloud.
 ## Features
 
 - **Hold-to-talk** (default) or **tap-to-toggle** on a configurable hotkey.
+- **Optional wake word** (off by default) — say "Hey Jarvis" (or Alexa / Hey
+  Mycroft / Hey Rhasspy) to talk hands-free. Runs locally with
+  [openWakeWord](https://github.com/dscripka/openWakeWord); Home Assistant's own
+  voice-activity detection ends each command.
 - **Streaming UI** — popups slide up from the bottom-middle of whichever monitor
   your cursor is on: Listening → Thinking (with your recognised words) → the
   streaming reply, then it slides away.
@@ -80,6 +84,8 @@ Put a shortcut to **`AssistKey.vbs`** in your Startup folder
 | **Trigger** | *Hold to talk* (hold while speaking) or *Tap to toggle* (tap on, tap off). |
 | **Microphone / Speaker** | Input and output devices, or the system defaults. |
 | **Assistant** | Which HA pipeline to use; *Preferred* follows your HA default. |
+| **Wake word** | Enable hands-free listening and pick the word (Hey Jarvis / Alexa / …). Off by default; downloads a small local model on first enable. |
+| **Sensitivity** | Wake-word detection threshold — higher is stricter (fewer false triggers). |
 | **Dismiss after** | How long a reply popup lingers before sliding away. |
 
 Settings are saved to `config.json` next to the app and applied immediately —
@@ -105,6 +111,7 @@ silence detection).
 |---|---|
 | `app.py` | Entry point: tray, hotkey, asyncio loop, single-instance, GUI wiring. |
 | `assist_client.py` | Async HA Assist pipeline client: audio capture, streaming, playback. |
+| `wake.py` | Optional wake-word listener (openWakeWord). |
 | `overlay.py` | The popup overlay + the settings dialog. |
 | `config.py` | `config.json` load/save + credential resolution + hotkey serialization. |
 | `tests/` | Automated tests (config, hotkey modes, overlay stuck-recovery). |

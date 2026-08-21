@@ -6,3 +6,5 @@ miniaudio>=1.6
 pystray>=0.19
 Pillow>=10
 customtkinter>=5.2
+openwakeword>=0.6
+onnxruntime>=1.17

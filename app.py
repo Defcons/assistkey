@@ -27,9 +27,12 @@ import pystray
 from PIL import Image, ImageDraw
 from pynput import keyboard as kb
 
+import winsound
+
 import config as cfg
 from assist_client import AssistClient
 from overlay import Overlay
+from wake import WakeListener
 
 IDLE_COL = (154, 160, 166)
 ACTIVE_COL = (129, 201, 149)
@@ -148,6 +151,7 @@ class App:
 
         self.hotkey = HotkeyListener(self.config, on_down=self._hotkey_down,
                                      on_up=self._hotkey_up)
+        self.wake = WakeListener(self.config, on_wake=self._on_wake)
         self.icon = pystray.Icon(
             "assistkey", make_icon(IDLE_COL), "AssistKey",
             menu=pystray.Menu(
@@ -161,6 +165,7 @@ class App:
     def run(self):
         threading.Thread(target=self._run_loop, daemon=True).start()
         self.hotkey.start()
+        self.wake.start()  # idles until wake_enabled is set in Settings
         self.icon.run_detached()
         self.root.after(20, self._drain)
         if not self.config.is_configured():
@@ -191,10 +196,22 @@ class App:
     # ---- hotkey -> asyncio --------------------------------------------------
 
     def _hotkey_down(self):
+        if self.config.wake_enabled:
+            self.wake.pause()  # free the mic for the utterance
         asyncio.run_coroutine_threadsafe(self.client.start_utterance(), self.loop)
 
     def _hotkey_up(self):
         self.loop.call_soon_threadsafe(self.client.signal_release)
+
+    def _on_wake(self):
+        # Runs on the wake thread: pause listening, chime, run one utterance.
+        # No key release — Home Assistant's VAD ends the utterance.
+        self.wake.pause()
+        try:
+            winsound.Beep(760, 110)
+        except Exception:  # noqa: BLE001
+            pass
+        asyncio.run_coroutine_threadsafe(self.client.start_utterance(), self.loop)
 
     # ---- UI queue drain (main thread) --------------------------------------
 
@@ -229,10 +246,12 @@ class App:
         elif name == "error":
             self.icon.icon = make_icon(IDLE_COL)
             self.hotkey.mark_idle()
+            self.wake.resume()  # resume wake-word listening (no-op if it wasn't paused)
             self.overlay.error(args[0])
         elif name == "done":
             self.icon.icon = make_icon(IDLE_COL)
             self.hotkey.mark_idle()
+            self.wake.resume()
             self.overlay.done()
         elif name == "status":
             self.icon.title = f"AssistKey — {args[0]}"

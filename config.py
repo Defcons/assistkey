@@ -55,6 +55,9 @@ class Config:
     ha_token: str = ""                     # HA long-lived access token
     hotkey: list[str] = field(default_factory=lambda: ["f9"])
     trigger_mode: str = "hold"             # "hold" (press-and-hold) or "toggle" (tap on/off)
+    wake_enabled: bool = False             # listen for a wake word (openWakeWord)
+    wake_word: str = "hey_jarvis"          # openWakeWord model name
+    wake_sensitivity: float = 0.5          # 0–1 detection threshold (higher = stricter)
     mic_device: int | None = None          # sounddevice index; None = default
     speaker_device: int | None = None      # sounddevice index; None = default
     pipeline: str | None = None            # HA pipeline id; None = preferred
@@ -91,6 +94,9 @@ class Config:
             "ha_token": self.ha_token,
             "hotkey": self.hotkey,
             "trigger_mode": self.trigger_mode,
+            "wake_enabled": self.wake_enabled,
+            "wake_word": self.wake_word,
+            "wake_sensitivity": self.wake_sensitivity,
             "mic_device": self.mic_device,
             "speaker_device": self.speaker_device,
             "pipeline": self.pipeline,
