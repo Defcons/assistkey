@@ -71,14 +71,34 @@ def list_output_devices() -> list[tuple[int, str]]:
 
 
 def _list_devices(cap: str) -> list[tuple[int, str]]:
+    """One clean entry per real device.
+
+    Windows exposes every device under multiple host APIs (MME, DirectSound,
+    WASAPI, WDM-KS), which makes the raw list huge and full of duplicates. We
+    prefer WASAPI (full names, one per device); if that's unavailable we fall
+    back to the default device's host API, and only then to everything.
+    """
     devices = sd.query_devices()
-    hostapis = sd.query_hostapis()
-    out = []
-    for idx, dev in enumerate(devices):
-        if dev[cap] > 0:
-            api = hostapis[dev["hostapi"]]["name"]
-            out.append((idx, f"{dev['name']} ({api})"))
-    return out
+
+    def collect(api_idx):
+        return [(i, d["name"]) for i, d in enumerate(devices)
+                if d[cap] > 0 and d["hostapi"] == api_idx]
+
+    for i, api in enumerate(sd.query_hostapis()):
+        if "WASAPI" in api["name"]:
+            got = collect(i)
+            if got:
+                return got
+
+    ref = sd.default.device[0 if cap == "max_input_channels" else 1]
+    try:
+        got = collect(devices[ref]["hostapi"])
+        if got:
+            return got
+    except (IndexError, TypeError):
+        pass
+
+    return [(i, d["name"]) for i, d in enumerate(devices) if d[cap] > 0]
 
 
 class AssistClient:

@@ -12,6 +12,8 @@ is spoken aloud.
 > Works with any Home Assistant [Assist pipeline](https://www.home-assistant.io/voice_control/):
 > local Whisper/Piper, cloud, or an LLM conversation agent — whatever you've set up.
 
+![A reply popup](docs/popup.png)
+
 ## Features
 
 - **Hold-to-talk** (default) or **tap-to-toggle** on a configurable hotkey.
@@ -38,7 +40,7 @@ is spoken aloud.
 ## Install
 
 ```bat
-git clone https://github.com/<you>/voice-ptt.git
+git clone https://github.com/Defcons/voice-ptt.git
 cd voice-ptt
 py -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
@@ -68,6 +70,8 @@ Put a shortcut to **`Voice PTT.vbs`** in your Startup folder
 (`Win+R` → `shell:startup`).
 
 ## Settings
+
+<img src="docs/settings.png" width="360" alt="Settings dialog">
 
 | Setting | Notes |
 |---|---|
