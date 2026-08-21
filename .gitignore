@@ -1,0 +1,21 @@
+# Virtual environment
+.venv/
+
+# User config — contains your Home Assistant access token. Never commit.
+config.json
+
+# Runtime log
+voice-ptt.log
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Scratch
+_test_*.py
+_shot*.png
+
+# OS
+.DS_Store
+Thumbs.db
