@@ -230,7 +230,9 @@ class App:
 
     def _handle(self, cmd):
         name, *args = cmd
-        if name == "listening":
+        if name == "assistant":
+            self.overlay.set_assistant(args[0])
+        elif name == "listening":
             self.icon.icon = make_icon(ACTIVE_COL)
             self.overlay.listening()
         elif name == "thinking":
