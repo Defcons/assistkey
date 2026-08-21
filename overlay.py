@@ -627,7 +627,7 @@ class SettingsDialog:
 
         win = ctk.CTkToplevel(root)
         self.win = win
-        win.title("Voice PTT Settings")
+        win.title("AssistKey Settings")
         win.configure(fg_color=S_BG)
         win.attributes("-topmost", True)
         win.resizable(False, False)
@@ -638,7 +638,7 @@ class SettingsDialog:
         body = ctk.CTkFrame(win, fg_color=S_BG)
         body.pack(fill="both", expand=True, padx=22, pady=16)
 
-        ctk.CTkLabel(body, text="Voice PTT", text_color=S_FG,
+        ctk.CTkLabel(body, text="AssistKey", text_color=S_FG,
                      font=("Segoe UI Semibold", 16)).pack(anchor="w")
         ctk.CTkLabel(body, text="Talk to Home Assistant from your PC", text_color=S_MUTED,
                      font=("Segoe UI", 11)).pack(anchor="w", pady=(0, 4))

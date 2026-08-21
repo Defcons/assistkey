@@ -1,4 +1,4 @@
-"""Voice PTT — system-tray push-to-talk app for Home Assistant Assist.
+"""AssistKey — system-tray push-to-talk app for Home Assistant Assist.
 
 Hold the configured hotkey to talk to Jarvis. A tray icon shows state; an
 always-on-top toast shows Listening / your words / the streaming reply.
@@ -39,7 +39,7 @@ def kill_previous_instances():
     """Terminate any other instance of this app before we start.
 
     Matches by the process's EXECUTABLE PATH (always the full
-    `voice-ptt\\.venv\\Scripts\\python*.exe`), NOT its command line — because a
+    `assistkey\\.venv\\Scripts\\python*.exe`), NOT its command line — because a
     run.bat launch records a *relative* command line (`.venv\\Scripts\\python.exe
     -u app.py`) with no folder name in it, which a command-line match misses
     (that's how a stray duplicate survived and fought over the mic). The exe path
@@ -49,7 +49,7 @@ def kill_previous_instances():
     child, so ONE instance is two PIDs (self + parent shim). We exclude both so
     the killer never takes down its own process tree.
     """
-    venv = str(Path(sys.executable).resolve().parent.parent)  # ...\voice-ptt\.venv
+    venv = str(Path(sys.executable).resolve().parent.parent)  # ...\assistkey\.venv
     mine = {os.getpid(), os.getppid()}
     keep = " -and ".join(f"$_.ProcessId -ne {p}" for p in mine)
     ps = (
@@ -149,7 +149,7 @@ class App:
         self.hotkey = HotkeyListener(self.config, on_down=self._hotkey_down,
                                      on_up=self._hotkey_up)
         self.icon = pystray.Icon(
-            "voice_ptt", make_icon(IDLE_COL), "Voice PTT",
+            "assistkey", make_icon(IDLE_COL), "AssistKey",
             menu=pystray.Menu(
                 pystray.MenuItem("Settings…", lambda: self.ui_queue.put(("open_settings",))),
                 pystray.MenuItem("Quit", lambda: self.ui_queue.put(("quit",))),
@@ -235,7 +235,7 @@ class App:
             self.hotkey.mark_idle()
             self.overlay.done()
         elif name == "status":
-            self.icon.title = f"Voice PTT — {args[0]}"
+            self.icon.title = f"AssistKey — {args[0]}"
         elif name == "open_settings":
             self.overlay.open_settings(self.client, on_save=self._on_settings_saved)
         elif name == "quit":
@@ -243,7 +243,7 @@ class App:
 
     def _on_settings_saved(self):
         self.hotkey.reset()
-        self.icon.title = f"Voice PTT — {cfg.hotkey_label(self.config.hotkey)} to talk"
+        self.icon.title = f"AssistKey — {cfg.hotkey_label(self.config.hotkey)} to talk"
         # Apply any credential change: drop the socket so it reconnects with new creds
         # (also kicks the bootstrap loop if we were never connected).
         asyncio.run_coroutine_threadsafe(self.client.force_reconnect(), self.loop)
@@ -265,7 +265,7 @@ class App:
 def _setup_logging():
     """Redirect stdout/stderr to a log file so nothing fails silently under pythonw."""
     try:
-        log = Path(__file__).with_name("voice-ptt.log").open("w", buffering=1, encoding="utf-8")
+        log = Path(__file__).with_name("assistkey.log").open("w", buffering=1, encoding="utf-8")
         sys.stdout = log
         sys.stderr = log
     except Exception:  # noqa: BLE001 - logging must never block startup
