@@ -346,16 +346,16 @@ class Overlay:
                                      font=FONT_USER, width=WIDTH - 2 * PAD, justify="center")
                 y = c.bbox(item)[3]
         elif st == RESPONSE:
-            c.create_text(PAD, y, anchor="nw", text="JARVIS", fill=ACCENT, font=FONT_LABEL)
+            c.create_text(WIDTH / 2, y, anchor="n", text="JARVIS", fill=ACCENT, font=FONT_LABEL)
             y += 22
-            item = c.create_text(PAD, y, anchor="nw", text=self._response or "…",
-                                 fill=TEXT, font=FONT_BODY, width=WIDTH - 2 * PAD)
+            item = c.create_text(WIDTH / 2, y, anchor="n", text=self._response or "…",
+                                 fill=TEXT, font=FONT_BODY, width=WIDTH - 2 * PAD, justify="center")
             y = c.bbox(item)[3]
         elif st == ERROR:
-            c.create_text(PAD, y, anchor="nw", text="ERROR", fill=ERROR_COL, font=FONT_LABEL)
+            c.create_text(WIDTH / 2, y, anchor="n", text="ERROR", fill=ERROR_COL, font=FONT_LABEL)
             y += 22
-            item = c.create_text(PAD, y, anchor="nw", text=self._response, fill=ERROR_COL,
-                                 font=FONT_BODY, width=WIDTH - 2 * PAD)
+            item = c.create_text(WIDTH / 2, y, anchor="n", text=self._response, fill=ERROR_COL,
+                                 font=FONT_BODY, width=WIDTH - 2 * PAD, justify="center")
             y = c.bbox(item)[3]
 
         h = int(y + PAD)
@@ -484,6 +484,64 @@ class Overlay:
             self._dismiss_job = None
 
 
+class _Tooltip:
+    """Small dark hover tooltip for a widget."""
+
+    def __init__(self, widget, text, delay=400):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.tip = None
+        self._after = None
+        widget.bind("<Enter>", self._enter, add="+")
+        widget.bind("<Leave>", self._leave, add="+")
+        widget.bind("<ButtonPress>", self._leave, add="+")
+
+    def _enter(self, _e=None):
+        self._cancel()
+        self._after = self.widget.after(self.delay, self._show)
+
+    def _leave(self, _e=None):
+        self._cancel()
+        self._destroy()
+
+    def _cancel(self):
+        if self._after is not None:
+            try:
+                self.widget.after_cancel(self._after)
+            except tk.TclError:
+                pass
+            self._after = None
+
+    def _show(self):
+        if self.tip is not None or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 14
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        except tk.TclError:
+            return
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.overrideredirect(True)
+        self.tip.attributes("-topmost", True)
+        try:
+            self.tip.attributes("-alpha", 0.97)
+        except tk.TclError:
+            pass
+        tk.Label(self.tip, text=self.text, bg="#0e1220", fg=S_FG, font=("Segoe UI", 9),
+                 justify="left", wraplength=300, padx=10, pady=7, bd=0,
+                 highlightthickness=1, highlightbackground=S_HOVER).pack()
+        self.tip.geometry(f"+{x}+{y}")
+
+    def _destroy(self):
+        if self.tip is not None:
+            try:
+                self.tip.destroy()
+            except tk.TclError:
+                pass
+            self.tip = None
+
+
 class SettingsDialog:
     """Modern rounded settings dialog (customtkinter) with a dark title bar."""
 
@@ -516,18 +574,26 @@ class SettingsDialog:
 
         # --- Home Assistant ---
         self._section(body, "HOME ASSISTANT")
-        self.url_var = tk.StringVar(value=config.ha_url)
-        self._entry(body, "Server URL", self.url_var, placeholder="https://homeassistant.local:8123")
-        self.token_var = tk.StringVar(value=config.ha_token)
-        self._entry(body, "Access token", self.token_var, mask=True, placeholder="Long-lived access token")
+        _url, _token = config.credentials()  # show effective values (incl. env-var fallback)
+        self.url_var = tk.StringVar(value=_url)
+        self._entry(body, "Server URL", self.url_var, placeholder="https://homeassistant.local:8123",
+                    tip="Your Home Assistant address, including https:// and port — e.g.\n"
+                        "https://homeassistant.local:8123 or your external URL.\n"
+                        "Must be https: browsers/Windows block microphone capture over plain http.")
+        self.token_var = tk.StringVar(value=_token)
+        self._entry(body, "Access token", self.token_var, mask=True, placeholder="Long-lived access token",
+                    tip="A Long-Lived Access Token — it lets this app connect to your Home Assistant.\n"
+                        "Get one in HA: click your profile (bottom-left) → scroll to "
+                        "'Long-lived access tokens' → Create Token → copy it here.")
         ctk.CTkLabel(body, text="Home Assistant → your Profile → Long-lived access tokens",
                      text_color=S_MUTED, font=("Segoe UI", 10), wraplength=440,
                      justify="left").pack(anchor="w", pady=(1, 4))
         trow = ctk.CTkFrame(body, fg_color="transparent")
         trow.pack(fill="x", pady=(2, 2))
-        ctk.CTkButton(trow, text="Test connection", command=self._test, width=130, height=30,
-                      corner_radius=10, fg_color=S_FIELD, hover_color=S_HOVER,
-                      text_color=S_FG).pack(side="left")
+        test_btn = ctk.CTkButton(trow, text="Test connection", command=self._test, width=130, height=30,
+                                 corner_radius=10, fg_color=S_FIELD, hover_color=S_HOVER, text_color=S_FG)
+        test_btn.pack(side="left")
+        _Tooltip(test_btn, "Check that this URL and token can reach Home Assistant.")
         self.test_result = ctk.CTkLabel(trow, text="", text_color=S_MUTED, font=("Segoe UI", 10),
                                         wraplength=290, justify="left")
         self.test_result.pack(side="left", padx=(12, 0))
@@ -536,29 +602,40 @@ class SettingsDialog:
         self._section(body, "VOICE")
         hk = ctk.CTkFrame(body, fg_color="transparent")
         hk.pack(fill="x", pady=4)
-        ctk.CTkLabel(hk, text="Hotkey", text_color=S_MUTED, width=self.LABEL_W, anchor="w",
-                     font=("Segoe UI", 12)).pack(side="left")
+        hk_label = ctk.CTkLabel(hk, text="Hotkey", text_color=S_MUTED, width=self.LABEL_W, anchor="w",
+                                font=("Segoe UI", 12))
+        hk_label.pack(side="left")
         self.hotkey_var = tk.StringVar(value=cfg.hotkey_label(self.pending_hotkey))
-        ctk.CTkLabel(hk, textvariable=self.hotkey_var, fg_color=S_FIELD, corner_radius=10,
-                     text_color=S_FG, anchor="w", height=32, font=("Segoe UI", 12)).pack(
-                     side="left", fill="x", expand=True, ipadx=10)
+        hk_box = ctk.CTkLabel(hk, textvariable=self.hotkey_var, fg_color=S_FIELD, corner_radius=10,
+                              text_color=S_FG, anchor="w", height=32, font=("Segoe UI", 12))
+        hk_box.pack(side="left", fill="x", expand=True, ipadx=10)
         self.capture_btn = ctk.CTkButton(hk, text="Change…", command=self._capture_hotkey,
                                          width=90, height=32, corner_radius=10, fg_color=S_FIELD,
                                          hover_color=S_HOVER, text_color=S_FG)
         self.capture_btn.pack(side="left", padx=(8, 0))
+        _hk_tip = ("The key you hold (or tap) to talk. Click Change…, then press the key or "
+                   "combination you want (e.g. F9, or Ctrl+Space).")
+        for _w in (hk_label, hk_box, self.capture_btn):
+            _Tooltip(_w, _hk_tip)
 
         self.trigger_map = [("Hold to talk", "hold"), ("Tap to toggle", "toggle")]
         self.trigger_var = tk.StringVar()
-        self._option(body, "Trigger", self.trigger_map, config.trigger_mode, self.trigger_var)
+        self._option(body, "Trigger", self.trigger_map, config.trigger_mode, self.trigger_var,
+                     tip="How the hotkey works:\n• Hold to talk — mic is open only while you hold it.\n"
+                         "• Tap to toggle — tap once to start, tap again to stop.")
         self.mic_map = [("Default microphone", None)] + [(lbl, idx) for idx, lbl in list_input_devices()]
         self.mic_var = tk.StringVar()
-        self._option(body, "Microphone", self.mic_map, config.mic_device, self.mic_var)
+        self._option(body, "Microphone", self.mic_map, config.mic_device, self.mic_var,
+                     tip="Which microphone to record your voice from, or your Windows default.")
         self.spk_map = [("Default speaker", None)] + [(lbl, idx) for idx, lbl in list_output_devices()]
         self.spk_var = tk.StringVar()
-        self._option(body, "Speaker", self.spk_map, config.speaker_device, self.spk_var)
+        self._option(body, "Speaker", self.spk_map, config.speaker_device, self.spk_var,
+                     tip="Which speaker plays the assistant's spoken reply, or your Windows default.")
         self.pipe_map = [("Preferred", None)] + [(p["name"], p["id"]) for p in getattr(client, "pipelines", [])]
         self.pipe_var = tk.StringVar()
-        self._option(body, "Assistant", self.pipe_map, config.pipeline, self.pipe_var)
+        self._option(body, "Assistant", self.pipe_map, config.pipeline, self.pipe_var,
+                     tip="Which Home Assistant voice pipeline (assistant) to use. "
+                         "'Preferred' follows your Home Assistant default.")
 
         # --- Popup ---
         self._section(body, "POPUP")
@@ -567,12 +644,14 @@ class SettingsDialog:
         ctk.CTkLabel(dr, text="Dismiss after", text_color=S_MUTED, width=self.LABEL_W, anchor="w",
                      font=("Segoe UI", 12)).pack(side="left")
         self.dismiss_var = tk.IntVar(value=int(config.dismiss_seconds))
-        ctk.CTkSlider(dr, from_=2, to=20, number_of_steps=18, variable=self.dismiss_var,
-                      command=self._on_dismiss, progress_color=S_ACCENT, button_color=S_ACCENT,
-                      button_hover_color=S_ACCENT).pack(side="left", fill="x", expand=True, padx=(0, 10))
+        slider = ctk.CTkSlider(dr, from_=2, to=20, number_of_steps=18, variable=self.dismiss_var,
+                               command=self._on_dismiss, progress_color=S_ACCENT, button_color=S_ACCENT,
+                               button_hover_color=S_ACCENT)
+        slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.dismiss_label = ctk.CTkLabel(dr, text=f"{int(config.dismiss_seconds)}s",
                                           text_color=S_FG, width=28, font=("Segoe UI", 12))
         self.dismiss_label.pack(side="left")
+        _Tooltip(slider, "How many seconds a reply popup stays on screen before it slides away.")
 
         # --- Buttons ---
         br = ctk.CTkFrame(body, fg_color="transparent")
@@ -601,27 +680,35 @@ class SettingsDialog:
         ctk.CTkLabel(parent, text=text, text_color=S_ACCENT,
                      font=("Segoe UI Semibold", 10)).pack(anchor="w", pady=(12, 2))
 
-    def _entry(self, parent, label, var, mask=False, placeholder=""):
+    def _entry(self, parent, label, var, mask=False, placeholder="", tip=""):
         r = ctk.CTkFrame(parent, fg_color="transparent")
         r.pack(fill="x", pady=4)
-        ctk.CTkLabel(r, text=label, text_color=S_MUTED, width=self.LABEL_W, anchor="w",
-                     font=("Segoe UI", 12)).pack(side="left")
-        ctk.CTkEntry(r, textvariable=var, corner_radius=10, fg_color=S_FIELD, border_width=0,
-                     height=34, font=("Segoe UI", 12), placeholder_text=placeholder,
-                     show=("•" if mask else "")).pack(side="left", fill="x", expand=True)
+        lbl = ctk.CTkLabel(r, text=label, text_color=S_MUTED, width=self.LABEL_W, anchor="w",
+                           font=("Segoe UI", 12))
+        lbl.pack(side="left")
+        ent = ctk.CTkEntry(r, textvariable=var, corner_radius=10, fg_color=S_FIELD, border_width=0,
+                           height=34, font=("Segoe UI", 12), placeholder_text=placeholder,
+                           show=("•" if mask else ""))
+        ent.pack(side="left", fill="x", expand=True)
+        if tip:
+            _Tooltip(lbl, tip)
+            _Tooltip(ent, tip)
 
-    def _option(self, parent, label, mapping, current, var):
+    def _option(self, parent, label, mapping, current, var, tip=""):
         r = ctk.CTkFrame(parent, fg_color="transparent")
         r.pack(fill="x", pady=4)
-        ctk.CTkLabel(r, text=label, text_color=S_MUTED, width=self.LABEL_W, anchor="w",
-                     font=("Segoe UI", 12)).pack(side="left")
-        values = [lbl for lbl, _ in mapping]
-        ctk.CTkOptionMenu(r, values=values, variable=var, corner_radius=10, height=34,
-                          fg_color=S_FIELD, button_color=S_FIELD, button_hover_color=S_HOVER,
-                          text_color=S_FG, dropdown_fg_color=S_FIELD, dropdown_text_color=S_FG,
-                          dropdown_hover_color=S_ACCENT, font=("Segoe UI", 12)).pack(
-                          side="left", fill="x", expand=True)
-        var.set(next((lbl for lbl, val in mapping if val == current), values[0] if values else ""))
+        lbl = ctk.CTkLabel(r, text=label, text_color=S_MUTED, width=self.LABEL_W, anchor="w",
+                           font=("Segoe UI", 12))
+        lbl.pack(side="left")
+        values = [lbl_ for lbl_, _ in mapping]
+        menu = ctk.CTkOptionMenu(r, values=values, variable=var, corner_radius=10, height=34,
+                                 fg_color=S_FIELD, button_color=S_FIELD, button_hover_color=S_HOVER,
+                                 text_color=S_FG, dropdown_fg_color=S_FIELD, dropdown_text_color=S_FG,
+                                 dropdown_hover_color=S_ACCENT, font=("Segoe UI", 12))
+        menu.pack(side="left", fill="x", expand=True)
+        var.set(next((lbl_ for lbl_, val in mapping if val == current), values[0] if values else ""))
+        if tip:
+            _Tooltip(lbl, tip)
 
     # ---- actions ------------------------------------------------------------
 
