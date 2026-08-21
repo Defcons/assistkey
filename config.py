@@ -1,4 +1,4 @@
-"""Persistent settings for the voice-ptt tray app.
+"""Persistent settings for the AssistKey tray app.
 
 Stored as config.json next to this file. Holds the hotkey (a set of keys that
 must all be held), the mic / speaker device indices, and the chosen HA Assist

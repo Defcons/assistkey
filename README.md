@@ -1,4 +1,4 @@
-# Voice PTT — push-to-talk for Home Assistant Assist
+# AssistKey — push-to-talk for Home Assistant Assist
 
 A lightweight Windows **system-tray app** that lets you talk to your
 [Home Assistant](https://www.home-assistant.io/) voice assistant from your PC:
@@ -40,15 +40,15 @@ is spoken aloud.
 ## Install
 
 ```bat
-git clone https://github.com/Defcons/voice-ptt.git
-cd voice-ptt
+git clone https://github.com/Defcons/assistkey.git
+cd assistkey
 py -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 ## Run
 
-- **Silent tray app:** double-click **`Voice PTT.vbs`** (no console window).
+- **Silent tray app:** double-click **`AssistKey.vbs`** (no console window).
 - **With a console** (handy the first time / for troubleshooting): `run.bat`.
 
 On first run the **Settings** dialog opens automatically. Enter your:
@@ -66,7 +66,7 @@ Right-click the tray icon any time for **Settings…** or **Quit**.
 
 ### Start automatically at login
 
-Put a shortcut to **`Voice PTT.vbs`** in your Startup folder
+Put a shortcut to **`AssistKey.vbs`** in your Startup folder
 (`Win+R` → `shell:startup`).
 
 ## Settings
@@ -109,7 +109,7 @@ silence detection).
 | `config.py` | `config.json` load/save + credential resolution + hotkey serialization. |
 | `tests/` | Automated tests (config, hotkey modes, overlay stuck-recovery). |
 
-Errors are written to `voice-ptt.log` next to the app (the silent launcher has
+Errors are written to `assistkey.log` next to the app (the silent launcher has
 no console).
 
 ## License
