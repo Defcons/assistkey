@@ -65,25 +65,26 @@ def monitor_workarea_at(x: int, y: int):
 
 
 MAGIC = "#ff00ff"          # transparent knock-out colour for rounded corners
-CARD = "#1e2230"
+CARD = "#20242f"           # slightly warmer/softer card
 BORDER = "#333a4d"
-TITLE_COL = "#e8eaed"
-ACCENT = "#8ab4f8"
+TITLE_COL = "#c9d0da"      # softened (was near-white, too harsh)
+ACCENT = "#93b7f2"         # a touch softer blue
 MUTED = "#9aa0a6"
-TEXT = "#f1f3f4"
-ERROR_COL = "#f28b82"
+TEXT = "#d6dce4"           # soft light-grey reply text, gentler contrast
+ERROR_COL = "#f0a6a0"      # softer red
+REVEAL_FROM = "#2b303c"    # colour the reply fades UP from (near the card)
 
 WIDTH = 620
-PAD = 22
+PAD = 24
 MARGIN = 44                # gap above the taskbar at rest
-SLIDE = 46                 # px the popup travels while sliding in/out
-APPEAR_MS = 200
-VANISH_MS = 150
+SLIDE = 40                 # px the popup travels while sliding in/out
+APPEAR_MS = 300            # gentler entrance
+VANISH_MS = 180
 
 FONT_LABEL = ("Segoe UI Semibold", 10)
-FONT_STATUS = ("Segoe UI", 15)
-FONT_USER = ("Segoe UI", 12, "italic")
-FONT_BODY = ("Segoe UI", 13)
+FONT_STATUS = ("Segoe UI Semilight", 17)
+FONT_USER = ("Segoe UI Light", 13, "italic")
+FONT_BODY = ("Segoe UI Semilight", 15)
 
 HIDDEN, LISTENING, THINKING, RESPONSE, ERROR = "hidden", "listening", "thinking", "response", "error"
 
@@ -105,6 +106,13 @@ def _ease_out(t):
 
 def _ease_in(t):
     return t ** 3
+
+
+def _lerp_color(a, b, t):
+    a, b = a.lstrip("#"), b.lstrip("#")
+    return "#" + "".join(
+        f"{round(int(a[i:i + 2], 16) + (int(b[i:i + 2], 16) - int(a[i:i + 2], 16)) * t):02x}"
+        for i in (0, 2, 4))
 
 
 def _round_points(x0, y0, x1, y1, r):
@@ -148,6 +156,8 @@ class Overlay:
         self._slide_job = None
         self._dismiss_job = None
         self._hardhide_job = None
+        self._reveal = 1.0       # 0..1 soft fade-in of reply text
+        self._reveal_job = None
         self._last_change = time.monotonic()
         self._watchdog()  # periodic safety net against a stuck popup
 
@@ -221,6 +231,10 @@ class Overlay:
         if self._hardhide_job is not None:
             self.root.after_cancel(self._hardhide_job)
             self._hardhide_job = None
+        if self._reveal_job is not None:
+            self.root.after_cancel(self._reveal_job)
+            self._reveal_job = None
+        self._reveal = 1.0
         self._animating = False
         self._shown = False
         self._state = HIDDEN
@@ -288,6 +302,7 @@ class Overlay:
         self._stop_pulse()
         self._dots = 0
         self._pulse = 0
+        self._reveal = 0.0 if target in (RESPONSE, ERROR) else 1.0
         try:
             self._draw()
             self._shown = True
@@ -309,11 +324,36 @@ class Overlay:
         if self._target != self._state:
             self._transition()
             return
+        if self._state in (RESPONSE, ERROR):
+            self._start_reveal()
         if self._state == ERROR:
             self._schedule_dismiss()
-        elif self._dirty:
+        if self._dirty:
             self._dirty = False
             self._refresh()
+
+    def _start_reveal(self):
+        if self._reveal_job is not None:
+            self.root.after_cancel(self._reveal_job)
+            self._reveal_job = None
+        steps = 18
+
+        def step(i):
+            self._reveal = _ease_out(i / steps)
+            try:
+                if self._shown and not self._animating and self._state in (RESPONSE, ERROR):
+                    self._draw()
+                    self.win.attributes("-alpha", 0.97)
+                    self._place(self._rest_y())
+            except Exception:  # noqa: BLE001 - reveal is cosmetic, never let it wedge
+                pass
+            if i < steps and self._shown and self._state in (RESPONSE, ERROR):
+                self._reveal_job = self.root.after(16, lambda: step(i + 1))
+            else:
+                self._reveal = 1.0
+                self._reveal_job = None
+
+        step(1)
 
     def _refresh(self):
         if not self._shown or self._animating:
@@ -353,14 +393,16 @@ class Overlay:
         elif st == RESPONSE:
             c.create_text(WIDTH / 2, y, anchor="n", text=self._assistant.upper(),
                           fill=ACCENT, font=FONT_LABEL)
-            y += 22
+            y += 24
             item = c.create_text(WIDTH / 2, y, anchor="n", text=self._response or "…",
-                                 fill=TEXT, font=FONT_BODY, width=WIDTH - 2 * PAD, justify="center")
+                                 fill=_lerp_color(REVEAL_FROM, TEXT, self._reveal),
+                                 font=FONT_BODY, width=WIDTH - 2 * PAD, justify="center")
             y = c.bbox(item)[3]
         elif st == ERROR:
             c.create_text(WIDTH / 2, y, anchor="n", text="ERROR", fill=ERROR_COL, font=FONT_LABEL)
-            y += 22
-            item = c.create_text(WIDTH / 2, y, anchor="n", text=self._response, fill=ERROR_COL,
+            y += 24
+            item = c.create_text(WIDTH / 2, y, anchor="n", text=self._response,
+                                 fill=_lerp_color(REVEAL_FROM, ERROR_COL, self._reveal),
                                  font=FONT_BODY, width=WIDTH - 2 * PAD, justify="center")
             y = c.bbox(item)[3]
 
