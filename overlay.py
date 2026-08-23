@@ -192,6 +192,9 @@ class Overlay:
         self._hardhide_job = None
         self._reveal = 1.0       # 0..1 soft fade-in of reply text
         self._reveal_job = None
+        self._timer_raised = False   # Windows 1 ms timer resolution held while animating
+        self._timer_job = None
+        self._body_item = None       # reply text item id, so the reveal recolours it cheaply
         self._last_change = time.monotonic()
         self._watchdog()  # periodic safety net against a stuck popup
 
@@ -268,6 +271,9 @@ class Overlay:
         if self._reveal_job is not None:
             self.root.after_cancel(self._reveal_job)
             self._reveal_job = None
+        if self._timer_job is not None:
+            self.root.after_cancel(self._timer_job)
+        self._drop_timer_res()
         self._reveal = 1.0
         self._animating = False
         self._shown = False
@@ -370,24 +376,30 @@ class Overlay:
         if self._reveal_job is not None:
             self.root.after_cancel(self._reveal_job)
             self._reveal_job = None
-        steps = 18
+        dur = 0.28
+        self._hold_timer_res(int(dur * 1000) + 200)
+        start = time.monotonic()
 
-        def step(i):
-            self._reveal = _ease_out(i / steps)
+        def step():
+            p = (time.monotonic() - start) / dur
+            last = p >= 1.0
+            self._reveal = 1.0 if last else _ease_out(p)
+            # Only the reply text's colour changes here — recolour that one item
+            # instead of clearing and rebuilding the whole canvas every frame.
             try:
                 if self._shown and not self._animating and self._state in (RESPONSE, ERROR):
-                    self._draw()
-                    self.win.attributes("-alpha", 0.97)
-                    self._place(self._rest_y())
-            except Exception:  # noqa: BLE001 - reveal is cosmetic, never let it wedge
-                pass
-            if i < steps and self._shown and self._state in (RESPONSE, ERROR):
-                self._reveal_job = self.root.after(16, lambda: step(i + 1))
+                    target = TEXT if self._state == RESPONSE else ERROR_COL
+                    self.canvas.itemconfigure(
+                        self._body_item, fill=_lerp_color(REVEAL_FROM, target, self._reveal))
+            except tk.TclError:
+                pass  # item was replaced by a streaming redraw — it carries the colour itself
+            if not last and self._shown and not self._animating and self._state in (RESPONSE, ERROR):
+                self._reveal_job = self.root.after(16, step)
             else:
                 self._reveal = 1.0
                 self._reveal_job = None
 
-        step(1)
+        step()
 
     def _refresh(self):
         if not self._shown or self._animating:
@@ -412,6 +424,7 @@ class Overlay:
     def _draw(self):
         c = self.canvas
         c.delete("all")
+        self._body_item = None
         y = PAD
         st = self._state
 
@@ -431,6 +444,7 @@ class Overlay:
             item = c.create_text(WIDTH / 2, y, anchor="n", text=self._response or "…",
                                  fill=_lerp_color(REVEAL_FROM, TEXT, self._reveal),
                                  font=FONT_BODY, width=WIDTH - 2 * PAD, justify="center")
+            self._body_item = item
             y = c.bbox(item)[3]
         elif st == ERROR:
             c.create_text(WIDTH / 2, y, anchor="n", text="ERROR", fill=ERROR_COL, font=FONT_LABEL)
@@ -438,6 +452,7 @@ class Overlay:
             item = c.create_text(WIDTH / 2, y, anchor="n", text=self._response,
                                  fill=_lerp_color(REVEAL_FROM, ERROR_COL, self._reveal),
                                  font=FONT_BODY, width=WIDTH - 2 * PAD, justify="center")
+            self._body_item = item
             y = c.bbox(item)[3]
 
         h = int(y + PAD)
@@ -490,17 +505,51 @@ class Overlay:
 
     # ---- animation ----------------------------------------------------------
 
-    def _tween(self, dur_ms, frame, done, ease):
-        self._cancel_slide()
-        steps = max(1, int(dur_ms / 16))
+    def _hold_timer_res(self, ms):
+        """Raise the Windows timer resolution to 1 ms for ~`ms`, then let it drop.
 
-        def run(i):
+        Default granularity is ~15.6 ms, so a 60 fps `after(16)` tween actually
+        fires at ~23–31 ms and stutters. Idempotent and self-releasing: repeated
+        calls just extend the hold, and a single tracked job always lowers it
+        again, so a mostly-idle tray app isn't pinning the system timer.
+        """
+        try:
+            if not self._timer_raised:
+                ctypes.windll.winmm.timeBeginPeriod(1)
+                self._timer_raised = True
+        except Exception:  # noqa: BLE001 - non-Windows / missing winmm: just skip
+            pass
+        if self._timer_job is not None:
+            self.root.after_cancel(self._timer_job)
+        self._timer_job = self.root.after(int(ms), self._drop_timer_res)
+
+    def _drop_timer_res(self):
+        self._timer_job = None
+        try:
+            if self._timer_raised:
+                ctypes.windll.winmm.timeEndPeriod(1)
+                self._timer_raised = False
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _tween(self, dur_ms, frame, done, ease):
+        # Time-based: progress is read from the wall clock each frame, so a late
+        # frame skips ahead to stay on schedule instead of dragging the whole
+        # animation out (which is what read as "laggy"). Duration self-corrects.
+        self._cancel_slide()
+        self._hold_timer_res(dur_ms + 200)
+        dur = max(1, dur_ms) / 1000.0
+        start = time.monotonic()
+
+        def run():
+            p = (time.monotonic() - start) / dur
+            last = p >= 1.0
             broken = False
             try:
-                frame(ease(i / steps))
+                frame(ease(1.0 if last else p))
             except Exception:  # noqa: BLE001 - a frame error must still complete the transition
                 broken = True
-            if broken or i >= steps:
+            if broken or last:
                 self._slide_job = None
                 if done:
                     try:
@@ -508,9 +557,9 @@ class Overlay:
                     except Exception:  # noqa: BLE001 - never leave _animating wedged
                         self._animating = False
                 return
-            self._slide_job = self.root.after(16, lambda: run(i + 1))
+            self._slide_job = self.root.after(16, run)
 
-        run(0)
+        run()
 
     def _slide_in(self, done):
         rest = self._rest_y()

@@ -1,9 +1,11 @@
 """Persistent settings for the AssistKey tray app.
 
-Stored as config.json next to this file. Holds the hotkey (a set of keys that
-must all be held), the mic / speaker device indices, and the chosen HA Assist
-pipeline. No secrets live here -- credentials come from the HASS_SERVER /
-HASS_TOKEN Windows user env vars.
+Stored as config.json next to this file: the hotkey (a set of keys that must all
+be held), trigger mode, mic / speaker device indices, the chosen HA Assist
+pipeline, wake-word options and popup preferences — plus the Home Assistant URL
+and long-lived token. `credentials()` resolves the URL/token from config first,
+falling back to the HASS_SERVER / HASS_TOKEN environment variables. Because the
+token is written here, config.json is sensitive and git-ignored.
 """
 
 from __future__ import annotations
@@ -104,4 +106,9 @@ class Config:
             "dismiss_seconds": self.dismiss_seconds,
             "popup_monitor": self.popup_monitor,
         }
-        CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        # Atomic write: a truncating write interrupted mid-flight (this app
+        # force-kills older instances at startup) would corrupt config.json and
+        # lose the token. Write a temp file, then rename over the target.
+        tmp = CONFIG_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, CONFIG_PATH)

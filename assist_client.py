@@ -183,7 +183,10 @@ class AssistClient:
                 async for raw in self.ws:
                     if isinstance(raw, bytes):
                         continue
-                    msg = json.loads(raw)
+                    try:
+                        msg = json.loads(raw)
+                    except (ValueError, TypeError):
+                        continue  # ignore an unparseable frame, don't kill the pump
                     q = self._routes.get(msg.get("id"))
                     if q is not None:
                         await q.put(msg)
@@ -208,7 +211,14 @@ class AssistClient:
         self._release.set()
 
     async def start_utterance(self):
-        if self._active or self.ws is None:
+        if self._active:
+            return  # one already running; it will emit its own ("done",)
+        if self.ws is None:
+            # Not connected yet (e.g. a wake trigger or key-press during startup).
+            # We must still emit a terminal signal: the caller may have paused
+            # wake-word listening, and only ("done",)/("error",) resumes it —
+            # otherwise wake stays paused until the app is restarted.
+            self.ui(("done",))
             return
         self._active = True
         self._release = asyncio.Event()
@@ -264,7 +274,7 @@ class AssistClient:
 
         async def forward_audio():
             nonlocal handler_id, buffered
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             try:
                 while True:
                     try:
@@ -386,6 +396,6 @@ class AssistClient:
             sd.wait()
 
         try:
-            await asyncio.get_event_loop().run_in_executor(None, fetch_decode_play)
+            await asyncio.get_running_loop().run_in_executor(None, fetch_decode_play)
         except Exception as exc:  # noqa: BLE001 - playback failure shouldn't abort the run
             self.ui(("status", f"Playback error: {exc}"))
