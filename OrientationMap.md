@@ -1,6 +1,6 @@
 # OrientationMap — AssistKey
 
-_Last verified: 2026-08-23 — popup smoothed (timer-res + time-based tweens); hardening pass (wake pause/resume, atomic save, pump)._
+_Last verified: 2026-08-23 — feature pass: barge-in, follow-up, mic meter, tray connection colour, DPAPI token, autostart, rotating log, PyInstaller exe, CI._
 
 ## What this is
 A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hotkey → talk → release; always-on-top toast shows Listening → your words → the streaming reply, which is also spoken. Python 3.12+ / tkinter + customtkinter, asyncio HA WebSocket, pynput hotkey, pystray tray. Entry: `app.py` (run via `AssistKey.vbs` silent or `run.bat` with a console).
@@ -17,17 +17,21 @@ A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hot
 - Style: terse, purposeful docstrings; broad `except Exception  # noqa: BLE001` guards around anything cosmetic/best-effort so the UI/pump never wedges. Match it.
 
 ## Subsystem index
-- **App / wiring** — tray, hotkey modes, asyncio loop, single-instance, UI queue drain. Entry: `app.py` (`App`, `HotkeyListener`, `kill_previous_instances`). Threads + cross-thread rules: see KnowledgeBase §Architecture.
-- **Overlay + Settings** — the toast popup (Listening/Thinking/Response/Error state machine + slide/fade animation) and the settings dialog. Entry: `overlay.py` (`Overlay`, `SettingsDialog`, `_Dropdown`, `_Tooltip`). Animation internals + timing facts: KnowledgeBase §Popup overlay animation.
-- **Assist client** — persistent HA WebSocket, one utterance at a time: mic capture, pipeline events → UI callback, TTS playback. Entry: `assist_client.py` (`AssistClient`, `test_credentials`, device listing).
-- **Config** — `config.json` load/save, credential resolution, hotkey (canonical key) serialization. Entry: `config.py` (`Config`, `key_to_canon`, `hotkey_label`).
+- **App / wiring** — tray (icon reflects connected/active/disconnected + a Stop item), hotkey modes + barge-in, asyncio loop, single-instance, UI queue drain, rotating log. Entry: `app.py` (`App`, `HotkeyListener`, `kill_previous_instances`, `_rotate_logs`). Threads + cross-thread rules: see KnowledgeBase §Architecture.
+- **Overlay + Settings** — the toast popup (Listening/Thinking/Response/Error state machine + slide/fade animation, mic-level meter, click-to-stop) and the settings dialog. Entry: `overlay.py` (`Overlay`, `SettingsDialog`, `_Dropdown`, `_Tooltip`). Animation internals + timing facts: KnowledgeBase §Popup overlay animation.
+- **Assist client** — persistent HA WebSocket, one utterance at a time: mic capture, pipeline events → UI callback, TTS playback, barge-in cancel, conversation continuity + follow-up. Entry: `assist_client.py` (`AssistClient`, `_ws_is_open`, `test_credentials`).
+- **Config** — `config.json` load/save (atomic; token DPAPI-encrypted at rest), credential resolution, hotkey serialization. Entry: `config.py` (`Config`, `key_to_canon`, `hotkey_label`).
+- **Credentials at rest** — DPAPI (per-user) encrypt/decrypt of the HA token; graceful plaintext fallback. Entry: `dpapi.py` (`protect`, `unprotect`, `is_protected`). Wired into `config.load`/`save`.
+- **Autostart** — per-user Run-key "start at login" toggle (stdlib `winreg`, no admin). Entry: `autostart.py` (`is_enabled`, `set_enabled`). Checkbox in `SettingsDialog`.
 - **Wake word** — optional openWakeWord listener, off by default. Entry: `wake.py` (`WakeListener`, `WAKE_WORDS`).
+- **Packaging / CI** — single-file exe via `AssistKey.spec` + `build.bat` → `dist/AssistKey.exe`; tests run on Windows via `.github/workflows/ci.yml`.
 
 ## Global landmines
 - **Never launch the real app to test.** `app.kill_previous_instances()` matches by exe path under `…\.venv\Scripts\python*.exe` and kills the user's running copy, seizing the mic + hotkey. Verify overlay/animation with a standalone `Overlay` on a `tk.Tk()` (see the probe scripts pattern), not by running `app.py`.
 - **Overlay is main-thread-only.** Every `Overlay` method assumes the Tk main thread; asyncio/tray/wake code must route through the `ui_queue` (`app.App._drain`/`_handle`), never call the overlay directly.
 - **Cosmetic code must never wedge the pump or the transition state machine.** Animation/redraw/timer paths swallow exceptions and always complete the transition (`_animating` reset); the `_drain` loop always reschedules. Preserve this when editing.
-- **`config.json` holds the HA long-lived token** — git-ignored; never commit it, never echo it into logs/docs. Written atomically (`config.Config.save` → temp + `os.replace`) so a force-kill mid-write can't truncate away the token.
+- **`config.json` holds the HA token (DPAPI-encrypted at rest)** — git-ignored; never commit it, never echo it into logs/docs. `config.save` writes it via `dpapi.protect` (per-user encryption) atomically (temp + `os.replace`); `config.load` decrypts to plaintext in memory. Legacy plaintext tokens still load and migrate on next save.
+- **`kill_previous_instances` branches on `sys.frozen`** — the venv build matches `python*.exe` under `…\.venv\`; the PyInstaller exe matches its own `AssistKey.exe` name. Editing single-instance logic must keep BOTH paths correct, or a distributed exe could target unrelated `python.exe` processes.
 - **Every `wake.pause()` must be balanced by a `wake.resume()`.** Wake is paused before each utterance (`app._hotkey_down`/`_on_wake`) and resumed ONLY when the app sees a terminal `("done",)`/`("error",)`. So `AssistClient.start_utterance` MUST emit one even when it declines (e.g. ws not yet connected) — a silent early-return leaves wake-word listening paused until restart. Preserve this if you add another utterance entry point or early-return.
 
 ## Deferred

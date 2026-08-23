@@ -34,8 +34,9 @@ from assist_client import AssistClient
 from overlay import Overlay
 from wake import WakeListener
 
-IDLE_COL = (154, 160, 166)
-ACTIVE_COL = (129, 201, 149)
+IDLE_COL = (154, 160, 166)         # connected, ready
+ACTIVE_COL = (129, 201, 149)       # listening / working
+DISCONNECTED_COL = (200, 110, 100)  # not connected to Home Assistant
 
 
 def kill_previous_instances():
@@ -51,15 +52,27 @@ def kill_previous_instances():
     The venv python is a launcher shim that spawns the real interpreter as a
     child, so ONE instance is two PIDs (self + parent shim). We exclude both so
     the killer never takes down its own process tree.
+
+    Frozen (PyInstaller) build: the process IS `AssistKey.exe`, so match that name
+    directly — the venv-python path heuristic would otherwise select unrelated
+    `python.exe` processes under the exe's folder.
     """
-    venv = str(Path(sys.executable).resolve().parent.parent)  # ...\assistkey\.venv
     mine = {os.getpid(), os.getppid()}
     keep = " -and ".join(f"$_.ProcessId -ne {p}" for p in mine)
-    ps = (
-        "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" "
-        f"| Where-Object {{ $_.ExecutablePath -like '{venv}\\*' -and {keep} }} "
-        "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
-    )
+    if getattr(sys, "frozen", False):
+        name = Path(sys.executable).name  # AssistKey.exe
+        ps = (
+            f"Get-CimInstance Win32_Process -Filter \"Name='{name}'\" "
+            f"| Where-Object {{ {keep} }} "
+            "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+        )
+    else:
+        venv = str(Path(sys.executable).resolve().parent.parent)  # ...\assistkey\.venv
+        ps = (
+            "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" "
+            f"| Where-Object {{ $_.ExecutablePath -like '{venv}\\*' -and {keep} }} "
+            "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+        )
     try:
         subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps],
                        capture_output=True, timeout=10)
@@ -158,7 +171,9 @@ class App:
         self.root.withdraw()
         self.root.report_callback_exception = self._log_exception
         self.overlay = Overlay(self.root, self.config)
+        self.overlay.on_cancel = lambda: self.ui_queue.put(("cancel",))  # click popup to stop
         self.ui_queue: "queue.Queue" = queue.Queue()
+        self._connected = False
 
         self.loop = asyncio.new_event_loop()
         self.client = AssistClient(self.config, ui=lambda cmd: self.ui_queue.put(cmd))
@@ -168,9 +183,10 @@ class App:
                                      on_up=self._hotkey_up)
         self.wake = WakeListener(self.config, on_wake=self._on_wake)
         self.icon = pystray.Icon(
-            "assistkey", make_icon(IDLE_COL), "AssistKey",
+            "assistkey", make_icon(DISCONNECTED_COL), "AssistKey",
             menu=pystray.Menu(
                 pystray.MenuItem("Settings…", lambda: self.ui_queue.put(("open_settings",))),
+                pystray.MenuItem("Stop", lambda: self.ui_queue.put(("cancel",))),
                 pystray.MenuItem("Quit", lambda: self.ui_queue.put(("quit",))),
             ),
         )
@@ -211,6 +227,9 @@ class App:
     # ---- hotkey -> asyncio --------------------------------------------------
 
     def _hotkey_down(self):
+        if self.client.is_active():
+            self.client.request_cancel()  # barge-in: a press during a reply stops it
+            return
         if self.config.wake_enabled:
             self.wake.pause()  # free the mic for the utterance
         # notify_unavailable: a deliberate key-press deserves feedback if we're
@@ -246,15 +265,29 @@ class App:
             pass
         self.root.after(20, self._drain)  # ALWAYS reschedule — the UI pump must never die
 
+    def _set_idle_icon(self):
+        """Tray icon at rest: grey when connected, red when not."""
+        self.icon.icon = make_icon(IDLE_COL if self._connected else DISCONNECTED_COL)
+
     def _handle(self, cmd):
         name, *args = cmd
         if name == "assistant":
             self.overlay.set_assistant(args[0])
+        elif name == "connected":
+            self._connected = True
+            if not self.client.is_active():
+                self._set_idle_icon()
+        elif name == "disconnected":
+            self._connected = False
+            if not self.client.is_active():
+                self._set_idle_icon()
         elif name == "listening":
             self.icon.icon = make_icon(ACTIVE_COL)
             self.overlay.listening()
         elif name == "thinking":
             self.overlay.thinking()
+        elif name == "level":
+            self.overlay.set_level(args[0])
         elif name == "user_text":
             self.overlay.set_user_text(args[0])
         elif name == "response_reset":
@@ -263,16 +296,22 @@ class App:
             self.overlay.response_append(args[0])
         elif name == "response_final":
             self.overlay.response_final(args[0])
+        elif name == "cancel":
+            self.client.request_cancel()
         elif name == "error":
-            self.icon.icon = make_icon(IDLE_COL)
+            self._set_idle_icon()
             self.hotkey.mark_idle()
             self.wake.resume()  # resume wake-word listening (no-op if it wasn't paused)
             self.overlay.error(args[0])
         elif name == "done":
-            self.icon.icon = make_icon(IDLE_COL)
-            self.hotkey.mark_idle()
-            self.wake.resume()
-            self.overlay.done()
+            if self.client.consume_follow_up():
+                # HA asked to continue: keep wake paused, auto-listen (VAD-ended).
+                asyncio.run_coroutine_threadsafe(self.client.start_utterance(), self.loop)
+            else:
+                self._set_idle_icon()
+                self.hotkey.mark_idle()
+                self.wake.resume()
+                self.overlay.done()
         elif name == "status":
             self.icon.title = f"AssistKey — {args[0]}"
         elif name == "open_settings":
@@ -303,10 +342,34 @@ class App:
         self.root.destroy()
 
 
-def _setup_logging():
-    """Redirect stdout/stderr to a log file so nothing fails silently under pythonw."""
+def _rotate_logs(path: Path, keep: int = 3):
+    """Preserve the previous (non-empty) log instead of truncating it on launch.
+
+    Rolls assistkey.log -> .1 -> .2 -> .3 (oldest dropped). A clean run leaves an
+    empty log, which is NOT rolled — so the frequent kill+relaunch cycles this app
+    does don't fill the history with blanks; only runs that logged something stay.
+    """
     try:
-        log = Path(__file__).with_name("assistkey.log").open("w", buffering=1, encoding="utf-8")
+        if not (path.exists() and path.stat().st_size > 0):
+            return
+        oldest = path.with_name(f"{path.name}.{keep}")
+        if oldest.exists():
+            oldest.unlink()
+        for i in range(keep - 1, 0, -1):
+            src = path.with_name(f"{path.name}.{i}")
+            if src.exists():
+                src.replace(path.with_name(f"{path.name}.{i + 1}"))
+        path.replace(path.with_name(f"{path.name}.1"))
+    except OSError:
+        pass  # rotation is best-effort; never block startup
+
+
+def _setup_logging():
+    """Redirect stdout/stderr to a rolling log so nothing fails silently under pythonw."""
+    try:
+        path = Path(__file__).with_name("assistkey.log")
+        _rotate_logs(path)
+        log = path.open("w", buffering=1, encoding="utf-8")
         sys.stdout = log
         sys.stderr = log
     except Exception:  # noqa: BLE001 - logging must never block startup

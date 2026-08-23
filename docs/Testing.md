@@ -43,3 +43,19 @@ _Last updated: 2026-08-23_
 6. **After any of the above**, the global hotkey works again (hold it → Listening) — i.e. resume always fired.
 7. **Single-instance** — with Settings open, trigger Settings again from the tray. The existing window is focused, not a second dialog.
 8. **Mid-reconnect** — (hard to stage) if you press the hotkey while HA is reconnecting, you get a brief "Reconnecting to Home Assistant…" popup, not a raw error string.
+
+---
+
+## PENDING — Feature pass (2026-08-23): manual verification
+
+All are machine-verified where possible (29 unit tests, build+launch of the exe); these need a human with a live Home Assistant.
+
+1. **Tray connection colour** — start with HA unreachable (wrong URL): tray icon is **red**. Fix the URL / connect: turns **grey**. Hold the hotkey: **green** while Listening/working, back to grey after. Drop HA (stop it): returns to red within a few seconds.
+2. **Barge-in / cancel** — while a reply is **speaking**, press the hotkey → speech stops immediately and the popup dismisses. Repeat with tray **Stop** and with **clicking the popup**. During **Thinking**, clicking the popup / tray Stop also aborts cleanly (no stuck popup).
+3. **Mic level meter** — hold the hotkey and speak: a bar under "Listening" rises/falls with your voice; silence → near-empty.
+4. **Follow-up** (Settings → Voice → Follow-up ON; needs an HA agent that asks a question) — after a reply that asks something, the app re-listens automatically (no key press), ends on your silence (HA VAD), and the answer continues the same conversation. With Follow-up OFF, it dismisses as before. If it never auto-listens, capture the `intent-end` payload to confirm where HA put `continue_conversation` (see ToDo).
+5. **Conversation continuity** — with Follow-up OFF, issue a command, then within ~60 s press again and give a context-dependent follow-up ("...and turn it off") — HA should keep context.
+6. **DPAPI token** — open `config.json` after saving: the token shows as `"dpapi:..."`, not plaintext. Test connection still works; a fresh launch stays connected (decrypts). (An existing plaintext token migrates to encrypted on the next Save.)
+7. **Start at login** — Settings → Startup → toggle ON → Save. Check `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` has an `AssistKey` value; sign out/in → app starts silently. Toggle OFF → value removed.
+8. **Standalone exe** — on a machine WITHOUT the dev venv, run `dist\AssistKey.exe`: tray app starts, Settings opens, hold-to-talk works, wake-word downloads its model on first enable. (Build with `build.bat`.)
+9. **Rotating log** — force an error (e.g. bad token so a traceback logs), relaunch, confirm the prior log is preserved as `assistkey.log.1`.

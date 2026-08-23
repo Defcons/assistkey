@@ -47,3 +47,12 @@ def test_save_load_roundtrip(tmp_path, monkeypatch):
     assert loaded.hotkey == ["ctrl", "space"]
     assert loaded.trigger_mode == "toggle"
     assert loaded.dismiss_seconds == 8.0
+
+
+def test_token_encrypted_on_disk(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "CONFIG_PATH", tmp_path / "config.json")
+    cfg.Config(ha_token="supersecret").save()
+    raw = (tmp_path / "config.json").read_text(encoding="utf-8")
+    assert "supersecret" not in raw          # plaintext must never hit disk
+    assert '"dpapi:' in raw                   # stored as a DPAPI blob
+    assert cfg.Config.load().ha_token == "supersecret"   # decrypts back in memory

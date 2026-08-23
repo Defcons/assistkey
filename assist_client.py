@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import time
 import urllib.request
 
 import miniaudio
@@ -34,6 +35,7 @@ SAMPLE_RATE = 16000
 BLOCK = 1600  # 100 ms at 16 kHz
 COMPLETION_TIMEOUT = 60   # s after release to get run-end before forcing the popup away
 MAX_RECORD = 120          # s hard cap on recording (protects against a missed key-release)
+CONVERSATION_TTL = 60     # s a conversation_id is reused so follow-ups keep context
 
 
 def _ws_url(server: str) -> str:
@@ -124,8 +126,12 @@ class AssistClient:
         self._routes: dict[int, asyncio.Queue] = {}
         self._active = False
         self._release = asyncio.Event()
+        self._cancel = asyncio.Event()          # barge-in: abort the current run
         self.pipelines: list[dict] = []
         self.preferred_pipeline: str | None = None
+        self._conversation_id: str | None = None  # thread multi-turn context
+        self._conv_deadline = 0.0                 # monotonic; forget the id after this
+        self._follow_up_requested = False         # last reply asked to continue
 
     # ---- connection ---------------------------------------------------------
 
@@ -164,6 +170,7 @@ class AssistClient:
         if reply.get("type") != "auth_ok":
             raise RuntimeError(f"Auth failed: {reply}")
         self.ui(("status", f"Connected (HA {reply.get('ha_version')})"))
+        self.ui(("connected",))
 
     async def _request_once(self, payload: dict) -> dict:
         """Send a command and read the socket directly for its reply.
@@ -202,6 +209,7 @@ class AssistClient:
                     if q is not None:
                         await q.put(msg)
             except (websockets.ConnectionClosed, OSError) as exc:
+                self.ui(("disconnected",))
                 self.ui(("status", f"Disconnected ({exc.__class__.__name__}); reconnecting…"))
                 await self._reconnect()
 
@@ -221,6 +229,25 @@ class AssistClient:
     def signal_release(self):
         self._release.set()
 
+    def is_active(self) -> bool:
+        return self._active
+
+    def request_cancel(self):
+        """Barge-in: stop any TTS playback now and end the in-flight run. Any thread."""
+        try:
+            sd.stop()  # unblock _play's sd.wait() immediately
+        except Exception:  # noqa: BLE001
+            pass
+        loop = self.loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._cancel.set)
+
+    def consume_follow_up(self) -> bool:
+        """True once if the last reply asked to continue AND follow-up is enabled."""
+        want = self._follow_up_requested and self.config.follow_up_enabled
+        self._follow_up_requested = False
+        return want
+
     async def start_utterance(self, notify_unavailable: bool = False):
         if self._active:
             return  # one already running; it will emit its own ("done",)
@@ -236,6 +263,8 @@ class AssistClient:
             return
         self._active = True
         self._release = asyncio.Event()
+        self._cancel = asyncio.Event()
+        self._follow_up_requested = False
         try:
             await self._run_utterance()
         except Exception as exc:  # noqa: BLE001 - surface, don't crash the loop
@@ -248,11 +277,18 @@ class AssistClient:
         stop_capture = asyncio.Event()
         finished = asyncio.Event()
 
+        def on_audio(indata, frames, t, status):
+            b = bytes(indata)
+            audio_q.put(b)
+            # Emit a mic level (0..1 peak) for the Listening meter. Cheap; ~10/s.
+            arr = np.frombuffer(b, dtype=np.int16)
+            if arr.size:
+                self.ui(("level", float(np.abs(arr).max()) / 32768.0))
+
         try:
             stream = sd.RawInputStream(
                 samplerate=SAMPLE_RATE, channels=1, dtype="int16", blocksize=BLOCK,
-                device=self.config.mic_device,
-                callback=lambda indata, frames, t, status: audio_q.put(bytes(indata)),
+                device=self.config.mic_device, callback=on_audio,
             )
             stream.start()
         except Exception as exc:  # noqa: BLE001 - bad device index, etc.
@@ -275,6 +311,8 @@ class AssistClient:
         }
         if self.config.pipeline:
             run_opts["pipeline"] = self.config.pipeline
+        if self._conversation_id and time.monotonic() < self._conv_deadline:
+            run_opts["conversation_id"] = self._conversation_id  # continue the same chat
         await self.ws.send(json.dumps(run_opts))
 
         handler_id: int | None = None
@@ -334,10 +372,16 @@ class AssistClient:
             except asyncio.TimeoutError:
                 await events.put({"type": "__timeout__"})
 
+        async def watch_cancel():
+            await self._cancel.wait()
+            stop_capture.set()
+            await events.put({"type": "__cancel__"})
+
         watcher = asyncio.ensure_future(watch_release())
         forwarder = asyncio.ensure_future(forward_audio())
         capper = asyncio.ensure_future(max_record())
         completer = asyncio.ensure_future(completion_watchdog())
+        canceller = asyncio.ensure_future(watch_cancel())
 
         try:
             while True:
@@ -345,6 +389,8 @@ class AssistClient:
                 if msg.get("type") == "__timeout__":
                     self.ui(("error", "No response — timed out"))
                     break
+                if msg.get("type") == "__cancel__":
+                    break  # barge-in: silent stop; finally emits ("done",)
                 if msg.get("type") == "result":
                     if not msg.get("success"):
                         self.ui(("error", str(msg.get("error"))))
@@ -354,6 +400,9 @@ class AssistClient:
                 ev = msg.get("event", {})
                 etype = ev.get("type")
                 data = ev.get("data", {})
+                if isinstance(data, dict) and data.get("conversation_id"):
+                    self._conversation_id = data["conversation_id"]
+                    self._conv_deadline = time.monotonic() + CONVERSATION_TTL
 
                 if etype == "run-start":
                     handler_id = data["runner_data"]["stt_binary_handler_id"]
@@ -370,11 +419,20 @@ class AssistClient:
                         streamed_any = True
                         self.ui(("response_append", piece))
                 elif etype == "intent-end":
+                    io = data.get("intent_output", {}) or {}
                     if not streamed_any:
-                        speech = (data.get("intent_output", {}).get("response", {})
-                                  .get("speech", {}).get("plain", {}).get("speech"))
+                        speech = (io.get("response", {}).get("speech", {})
+                                  .get("plain", {}).get("speech"))
                         if speech:
                             self.ui(("response_final", speech))
+                    cid = io.get("conversation_id")
+                    if cid:
+                        self._conversation_id = cid
+                        self._conv_deadline = time.monotonic() + CONVERSATION_TTL
+                    # HA has moved this key around; check both known spots.
+                    self._follow_up_requested = bool(
+                        io.get("continue_conversation")
+                        or io.get("response", {}).get("continue_conversation"))
                 elif etype == "tts-end":
                     await self._play(data["tts_output"])
                 elif etype == "error":
@@ -390,7 +448,7 @@ class AssistClient:
                 await forwarder  # robust: never raises out (all sends guarded)
             except Exception:  # noqa: BLE001 - defensive; done must still fire
                 pass
-            for task in (watcher, capper, completer):
+            for task in (watcher, capper, completer, canceller):
                 task.cancel()
             self.ui(("done",))  # ALWAYS fires -> popup always dismisses
 

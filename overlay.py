@@ -20,6 +20,7 @@ import tkinter as tk
 import customtkinter as ctk
 from pynput import keyboard as kb
 
+import autostart
 import config as cfg
 from assist_client import list_input_devices, list_output_devices, test_credentials
 from wake import WAKE_WORDS
@@ -173,6 +174,7 @@ class Overlay:
 
         self.canvas = tk.Canvas(self.win, bg=MAGIC, highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Button-1>", self._on_click)  # click the popup to stop a run
 
         self._state = HIDDEN
         self._target = HIDDEN
@@ -196,6 +198,8 @@ class Overlay:
         self._timer_job = None
         self._body_item = None       # reply text item id, so the reveal recolours it cheaply
         self._settings = None        # the open SettingsDialog, if any (single-instance guard)
+        self._level = 0.0            # 0..1 mic level for the Listening meter
+        self.on_cancel = None        # set by the app: click the popup to stop / cancel
         self._last_change = time.monotonic()
         self._watchdog()  # periodic safety net against a stuck popup
 
@@ -208,8 +212,21 @@ class Overlay:
         self._cancel_dismiss()
         self._user_text = ""
         self._response = ""
+        self._level = 0.0
         self._touch()
         self._enter(LISTENING)
+
+    def set_level(self, v):
+        """Feed the Listening mic meter (0..1). Attack fast, release slow."""
+        v = max(0.0, min(1.0, float(v)))
+        self._level = v if v > self._level else self._level * 0.6 + v * 0.4
+        if self._state == LISTENING and self._shown and not self._animating:
+            self._refresh()
+
+    def _on_click(self, _e=None):
+        # Click the popup to stop a run in progress (barge-in / dismiss a wake mis-fire).
+        if self._state in (LISTENING, THINKING, RESPONSE) and self.on_cancel:
+            self.on_cancel()
 
     def thinking(self):
         self._touch()
@@ -442,6 +459,7 @@ class Overlay:
 
         if st == LISTENING:
             y = self._status_row(y, "Listening", self._pulse_colour())
+            y = self._level_bar(y + 12)
         elif st == THINKING:
             y = self._status_row(y, "Thinking", ACCENT)
             if self._user_text:
@@ -485,6 +503,16 @@ class Overlay:
     def _pulse_colour(self):
         shades = ["#5b7c4a", "#6fae5f", "#81c995", "#a5d6a0"]
         return shades[self._pulse % len(shades)]
+
+    def _level_bar(self, y):
+        c = self.canvas
+        x0, x1 = PAD + 6, WIDTH - PAD - 6
+        h = 6
+        c.create_rectangle(x0, y, x1, y + h, fill=REVEAL_FROM, outline="")  # track
+        w = (x1 - x0) * max(0.0, min(1.0, self._level))
+        if w >= 1:
+            c.create_rectangle(x0, y, x0 + w, y + h, fill=ACCENT, outline="")  # fill
+        return y + h
 
     # ---- geometry -----------------------------------------------------------
 
@@ -863,6 +891,10 @@ class SettingsDialog:
         self._option(body, "Assistant", self.pipe_map, config.pipeline, self.pipe_var,
                      tip="Which Home Assistant voice pipeline (assistant) to use. "
                          "'Preferred' follows your Home Assistant default.")
+        self.followup_var = self._toggle_row(
+            body, "Follow-up", config.follow_up_enabled,
+            tip="When the assistant asks a question, keep listening for your answer "
+                "without pressing the key again (ended by Home Assistant's voice detection).")
 
         # --- Wake word ---
         self._section(body, "WAKE WORD")
@@ -926,6 +958,13 @@ class SettingsDialog:
         self.dismiss_label.pack(side="left")
         _Tooltip(slider, "How many seconds the popup stays after the reply finishes being spoken.")
 
+        # --- Startup ---
+        self._section(body, "STARTUP")
+        self.autostart_var = self._toggle_row(
+            body, "Start at login", autostart.is_enabled(),
+            tip="Launch AssistKey automatically when you sign in to Windows "
+                "(adds a per-user startup entry; no admin needed).")
+
         # --- Buttons ---
         br = ctk.CTkFrame(body, fg_color="transparent")
         br.pack(fill="x", pady=(18, 0))
@@ -966,6 +1005,21 @@ class SettingsDialog:
         if tip:
             _Tooltip(lbl, tip)
             _Tooltip(ent, tip)
+
+    def _toggle_row(self, parent, label, initial, tip=""):
+        r = ctk.CTkFrame(parent, fg_color="transparent")
+        r.pack(fill="x", pady=4)
+        lbl = ctk.CTkLabel(r, text=label, text_color=S_MUTED, width=self.LABEL_W, anchor="w",
+                           font=("Segoe UI", 12))
+        lbl.pack(side="left")
+        var = tk.BooleanVar(value=bool(initial))
+        sw = ctk.CTkSwitch(r, text="", variable=var, onvalue=True, offvalue=False,
+                           width=44, progress_color=S_ACCENT, button_color=S_FG, fg_color=S_HOVER)
+        sw.pack(side="left")
+        if tip:
+            _Tooltip(lbl, tip)
+            _Tooltip(sw, tip)
+        return var
 
     def _option(self, parent, label, mapping, current, var, tip=""):
         r = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1076,7 +1130,9 @@ class SettingsDialog:
         self.config.wake_sensitivity = round(float(self.sens_var.get()), 2)
         self.config.popup_monitor = self._value_for(self.screen_map, self.screen_var) or "primary"
         self.config.dismiss_seconds = float(max(2, int(self.dismiss_var.get())))
+        self.config.follow_up_enabled = bool(self.followup_var.get())
         self.config.save()
+        autostart.set_enabled(bool(self.autostart_var.get()))  # system setting, not in config.json
         self.on_save()
         self._close()
 

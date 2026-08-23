@@ -63,3 +63,30 @@ def test_start_utterance_mid_reconnect_silent_for_wake():
     client.ws = _FakeWS("CLOSED")
     asyncio.run(client.start_utterance())
     assert ("done",) in emitted
+
+
+def test_is_active_reflects_state():
+    client = AssistClient(cfg.Config(), ui=lambda _c: None)
+    assert client.is_active() is False
+    client._active = True
+    assert client.is_active() is True
+
+
+def test_consume_follow_up_is_one_shot_and_gated():
+    client = AssistClient(cfg.Config(follow_up_enabled=True), ui=lambda _c: None)
+    client._follow_up_requested = True
+    assert client.consume_follow_up() is True
+    assert client.consume_follow_up() is False        # consumed
+    off = AssistClient(cfg.Config(follow_up_enabled=False), ui=lambda _c: None)
+    off._follow_up_requested = True
+    assert off.consume_follow_up() is False            # gated by config
+
+
+def test_request_cancel_safe_without_loop(monkeypatch):
+    import assist_client as ac
+    called = []
+    monkeypatch.setattr(ac.sd, "stop", lambda: called.append(True))
+    client = AssistClient(cfg.Config(), ui=lambda _c: None)
+    client.loop = None
+    client.request_cancel()   # must not raise even with no loop
+    assert called == [True]

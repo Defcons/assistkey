@@ -4,8 +4,12 @@
 # User config — contains your Home Assistant access token. Never commit.
 config.json
 
-# Runtime log
-assistkey.log
+# Runtime log (+ rolled history assistkey.log.1/.2/.3)
+assistkey.log*
+
+# PyInstaller build output
+build/
+dist/
 
 # Wake-word models cache
 models/

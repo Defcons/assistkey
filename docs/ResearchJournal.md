@@ -56,3 +56,28 @@ Cleared the four deferred UX items from the 2026-08-23 hardening pass.
 4. **Settings single-instance.** `Overlay.open_settings` re-focuses a live dialog instead of stacking a new one. Smoke-tested (`probe_settings_guard.py`).
 
 **Verified:** `pytest tests/` 21 passed (+4); all modules `py_compile` clean; settings-guard probe. **Deferred still:** only the optional popup-motion polish, gated on the human smoothness check (Testing.md). **Manual-test needed:** the capture UX (Esc / modifier-only / no-interference) — can't be unit-tested through a real pynput+Tk dialog; logged in Testing.md.
+
+---
+
+## 2026-08-23 — Feature pass (nine additions across reliability, UX, security, distribution)
+
+All nine recommended items, implemented + tested + documented in one pass. 29 tests pass (+8).
+
+**Reliability**
+1. **CI** — `.github/workflows/ci.yml` runs pytest on windows-latest.
+2. **Rotating log** — `app._rotate_logs` keeps `assistkey.log.1..3` of previous non-empty runs instead of truncating on every launch (empty clean runs aren't rolled). `.gitignore` → `assistkey.log*`.
+3. **Tray connection colour** — client emits `("connected",)`/`("disconnected",)`; `App._set_idle_icon` shows red `DISCONNECTED_COL` vs grey `IDLE_COL` (green while active). Tray gains a "Stop" item.
+
+**Features**
+4. **Barge-in / cancel** — `AssistClient.request_cancel()` (`sd.stop()` + `_cancel` event → `__cancel__` sentinel; `finally` still emits done). Triggers: hotkey press while `is_active()`, tray Stop, click the popup (`Overlay._on_click`/`on_cancel`).
+5. **Follow-up + conversation continuity** — captures `conversation_id`, replays within `CONVERSATION_TTL`; `follow_up_enabled` (default off) auto-listens when HA sends `continue_conversation`. App keeps wake paused across the follow-up chain to avoid mic contention. Best-effort re: HA field path (no-op if absent).
+6. **Mic level meter** — RawInputStream callback emits `("level", peak)`; `Overlay.set_level` draws a bar in the Listening popup.
+
+**Security**
+7. **DPAPI token at rest** — new `dpapi.py` (`CryptProtectData`, per-user); `config.save`/`load` encrypt/decrypt behind a `dpapi:` marker, plaintext fallback, legacy migration. Plaintext never hits disk (test asserts).
+
+**Distribution**
+8. **Autostart** — new `autostart.py` (HKCU Run key, stdlib winreg); Settings "Start at login" checkbox.
+9. **PyInstaller exe** — `AssistKey.spec` + `build.bat` → `dist/AssistKey.exe` (~90 MB). Built (exit 0) and launch-tested (no import crash). Fixed `kill_previous_instances` to branch on `sys.frozen` (match `AssistKey.exe` vs venv `python*.exe`) — the venv heuristic would have mis-targeted `python.exe` under a distributed exe's folder.
+
+**Verified:** 29 tests pass; all modules `py_compile`; DPAPI/config/autostart/rotate probes; PyInstaller build + alive check. **Manual-test needed:** barge-in, level meter, follow-up, autostart checkbox, connection colour, exe on a clean machine — logged in Testing.md.

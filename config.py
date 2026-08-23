@@ -17,6 +17,8 @@ from pathlib import Path
 
 from pynput import keyboard as kb
 
+import dpapi
+
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
 # Normalise left/right modifier variants to one canonical token so a combo
@@ -65,6 +67,7 @@ class Config:
     pipeline: str | None = None            # HA pipeline id; None = preferred
     dismiss_seconds: float = 2.0           # seconds the popup lingers AFTER the reply is spoken
     popup_monitor: str = "primary"         # "primary" | "cursor" | monitor index ("0", "1", …)
+    follow_up_enabled: bool = False        # auto-listen for a follow-up when HA asks a question
 
     @property
     def hotkey_set(self) -> frozenset[str]:
@@ -86,7 +89,9 @@ class Config:
             try:
                 data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
                 known = {f for f in cls.__dataclass_fields__}
-                return cls(**{k: v for k, v in data.items() if k in known})
+                obj = cls(**{k: v for k, v in data.items() if k in known})
+                obj.ha_token = dpapi.unprotect(obj.ha_token)  # decrypt at rest -> plaintext in memory
+                return obj
             except Exception as exc:  # noqa: BLE001 - corrupt config shouldn't crash startup
                 print(f"config.json unreadable ({exc}); using defaults")
         return cls()
@@ -94,7 +99,7 @@ class Config:
     def save(self) -> None:
         data = {
             "ha_url": self.ha_url,
-            "ha_token": self.ha_token,
+            "ha_token": dpapi.protect(self.ha_token),  # encrypted at rest (DPAPI, per-user)
             "hotkey": self.hotkey,
             "trigger_mode": self.trigger_mode,
             "wake_enabled": self.wake_enabled,
@@ -105,6 +110,7 @@ class Config:
             "pipeline": self.pipeline,
             "dismiss_seconds": self.dismiss_seconds,
             "popup_monitor": self.popup_monitor,
+            "follow_up_enabled": self.follow_up_enabled,
         }
         # Atomic write: a truncating write interrupted mid-flight (this app
         # force-kills older instances at startup) would corrupt config.json and

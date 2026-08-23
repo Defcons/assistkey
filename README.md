@@ -25,9 +25,19 @@ is spoken aloud.
   your cursor is on: Listening → Thinking (with your recognised words) → the
   streaming reply, then it slides away.
 - **Spoken replies** through your chosen output device.
+- **Barge-in** — press the hotkey (or click the popup, or tray → **Stop**) while
+  the assistant is speaking to stop it. A live **mic-level meter** in the
+  Listening popup shows you're being heard.
+- **Follow-up** (optional) — when the assistant asks a question, keep talking
+  without pressing the key again (ended by Home Assistant's voice detection).
+- **At-a-glance status** — the tray icon is **grey** when connected, **green**
+  while listening/working, **red** when Home Assistant is unreachable.
+- **Encrypted token** — your access token is encrypted at rest with Windows
+  DPAPI (tied to your user account), not stored in plaintext.
+- **Start at login** — a one-click toggle in Settings (per-user, no admin).
 - **Everything configurable** in a modern settings dialog: Home Assistant URL &
   token, hotkey, trigger mode, microphone, speaker, which assistant pipeline,
-  and how long popups linger.
+  follow-up, start-at-login, and how long popups linger.
 - **Single instance** — launching again (or after an update) cleanly replaces
   the running copy, so you never get duplicate hotkey listeners.
 - **Robust** — the popup is guaranteed to dismiss and the app self-recovers even
@@ -70,8 +80,9 @@ Right-click the tray icon any time for **Settings…** or **Quit**.
 
 ### Start automatically at login
 
-Put a shortcut to **`AssistKey.vbs`** in your Startup folder
-(`Win+R` → `shell:startup`).
+Turn on **Settings → Startup → Start at login** (adds a per-user startup entry,
+no admin needed). Or do it manually: put a shortcut to **`AssistKey.vbs`** in
+your Startup folder (`Win+R` → `shell:startup`).
 
 ## Settings
 
@@ -86,11 +97,14 @@ Put a shortcut to **`AssistKey.vbs`** in your Startup folder
 | **Assistant** | Which HA pipeline to use; *Preferred* follows your HA default. |
 | **Wake word** | Enable hands-free listening and pick the word (Hey Jarvis / Alexa / …). Off by default; downloads a small local model on first enable. |
 | **Sensitivity** | Wake-word detection threshold — higher is stricter (fewer false triggers). |
+| **Follow-up** | Keep listening for your answer when the assistant asks a question. Off by default. |
+| **Start at login** | Launch AssistKey automatically when you sign in (per-user; no admin). |
 | **Dismiss after** | How long a reply popup lingers before sliding away. |
 
 Settings are saved to `config.json` next to the app and applied immediately —
-no restart needed. **`config.json` contains your access token, so it is
-git-ignored and never committed.**
+no restart needed. **Your access token is encrypted at rest with Windows DPAPI
+(tied to your user account); `config.json` is also git-ignored and never
+committed.**
 
 ## A note on "live" transcription
 
@@ -107,14 +121,26 @@ silence detection).
 .venv\Scripts\python.exe -m pytest tests/
 ```
 
+### Build a standalone .exe
+
+Bundle everything into a single `dist\AssistKey.exe` (no Python install needed to
+run it). openWakeWord models still download on first enable, as in a source run.
+
+```bat
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+build.bat
+```
+
 | File | Role |
 |---|---|
 | `app.py` | Entry point: tray, hotkey, asyncio loop, single-instance, GUI wiring. |
 | `assist_client.py` | Async HA Assist pipeline client: audio capture, streaming, playback. |
 | `wake.py` | Optional wake-word listener (openWakeWord). |
-| `overlay.py` | The popup overlay + the settings dialog. |
+| `overlay.py` | The popup overlay (with mic meter + click-to-stop) + the settings dialog. |
 | `config.py` | `config.json` load/save + credential resolution + hotkey serialization. |
-| `tests/` | Automated tests (config, hotkey modes, overlay stuck-recovery). |
+| `dpapi.py` | Encrypt/decrypt the HA token at rest (Windows DPAPI, per-user). |
+| `autostart.py` | Start-at-login toggle (per-user registry Run key). |
+| `tests/` | Automated tests (config, hotkey, overlay, client, dpapi, autostart). |
 
 Errors are written to `assistkey.log` next to the app (the silent launcher has
 no console).
