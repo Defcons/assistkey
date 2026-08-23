@@ -40,6 +40,17 @@ def _ws_url(server: str) -> str:
     return server.replace("https://", "wss://").replace("http://", "ws://") + "/api/websocket"
 
 
+def _ws_is_open(ws) -> bool:
+    """True only if the socket exists and is OPEN.
+
+    During a reconnect `self.ws` is the previous, *closed* socket (not None), so a
+    plain ``ws is None`` check would wave a doomed send through. `ClientConnection`
+    exposes a ``state`` enum (CONNECTING/OPEN/CLOSING/CLOSED); compare by name to
+    stay independent of the websockets version.
+    """
+    return getattr(getattr(ws, "state", None), "name", None) == "OPEN"
+
+
 async def test_credentials(url: str, token: str) -> tuple[bool, str]:
     """Try to connect + authenticate. Returns (ok, human-readable message).
 
@@ -210,15 +221,18 @@ class AssistClient:
     def signal_release(self):
         self._release.set()
 
-    async def start_utterance(self):
+    async def start_utterance(self, notify_unavailable: bool = False):
         if self._active:
             return  # one already running; it will emit its own ("done",)
-        if self.ws is None:
-            # Not connected yet (e.g. a wake trigger or key-press during startup).
-            # We must still emit a terminal signal: the caller may have paused
-            # wake-word listening, and only ("done",)/("error",) resumes it —
-            # otherwise wake stays paused until the app is restarted.
-            self.ui(("done",))
+        if not _ws_is_open(self.ws):
+            # Not connected yet, or mid-reconnect (a closed, non-None socket).
+            # Decline gracefully. We must still emit a terminal signal: the caller
+            # may have paused wake-word listening, and only ("done",)/("error",)
+            # resumes it — otherwise wake stays paused until the app is restarted.
+            if notify_unavailable:
+                self.ui(("error", "Reconnecting to Home Assistant…"))
+            else:
+                self.ui(("done",))
             return
         self._active = True
         self._release = asyncio.Event()

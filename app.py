@@ -93,6 +93,7 @@ class HotkeyListener:
         self._pressed: set[str] = set()
         self._latched = False   # current physical hold already acted on
         self._talking = False   # an utterance is currently open
+        self._suspended = False  # ignore all keys (while Settings captures a new hotkey)
         self._listener = kb.Listener(on_press=self._press, on_release=self._release)
 
     def start(self):
@@ -103,11 +104,23 @@ class HotkeyListener:
         self._latched = False
         self._talking = False
 
+    def suspend(self):
+        """Stop reacting to keys — used while the Settings dialog is capturing a
+        new hotkey, so pressing the *current* hotkey there can't start an utterance."""
+        self._suspended = True
+        self.reset()
+
+    def resume(self):
+        self._suspended = False
+        self.reset()
+
     def mark_idle(self):
         """The utterance ended on its own (done/error) — resync toggle state."""
         self._talking = False
 
     def _press(self, key):
+        if self._suspended:
+            return
         self._pressed.add(cfg.key_to_canon(key))
         target = self.config.hotkey_set
         if self._latched or not target or not (target <= self._pressed):
@@ -125,6 +138,8 @@ class HotkeyListener:
             self.on_down()
 
     def _release(self, key):
+        if self._suspended:
+            return
         canon = cfg.key_to_canon(key)
         self._pressed.discard(canon)
         if canon in self.config.hotkey_set:
@@ -198,7 +213,10 @@ class App:
     def _hotkey_down(self):
         if self.config.wake_enabled:
             self.wake.pause()  # free the mic for the utterance
-        asyncio.run_coroutine_threadsafe(self.client.start_utterance(), self.loop)
+        # notify_unavailable: a deliberate key-press deserves feedback if we're
+        # not connected yet (a gentle "Reconnecting…" instead of a raw error).
+        asyncio.run_coroutine_threadsafe(
+            self.client.start_utterance(notify_unavailable=True), self.loop)
 
     def _hotkey_up(self):
         self.loop.call_soon_threadsafe(self.client.signal_release)
@@ -258,7 +276,9 @@ class App:
         elif name == "status":
             self.icon.title = f"AssistKey — {args[0]}"
         elif name == "open_settings":
-            self.overlay.open_settings(self.client, on_save=self._on_settings_saved)
+            self.overlay.open_settings(self.client, on_save=self._on_settings_saved,
+                                       suspend_hotkey=self.hotkey.suspend,
+                                       resume_hotkey=self.hotkey.resume)
         elif name == "quit":
             self._quit()
 

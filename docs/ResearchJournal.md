@@ -43,3 +43,16 @@ Full read of all six modules for bugs/leaks/races. Fixed the high-confidence, lo
 **Verified:** `pytest tests/` 17 passed (+2 new); all modules import + `py_compile` clean; atomic-save probe.
 
 **Deferred (see ToDo):** hotkey-capture interference (main listener stays live during "Change…" capture), no cancel/modifier-only in capture, possible error-popup if a key is pressed mid-reconnect, no guard against opening two Settings dialogs. All behavioural/UX changes with regression risk — not folded into a correctness pass.
+
+---
+
+## 2026-08-23 — Settings/hotkey UX pass (the deferred ToDo items)
+
+Cleared the four deferred UX items from the 2026-08-23 hardening pass.
+
+1. **Hotkey-capture interference.** The Settings "Change…" capture ran a second `pynput` listener while the global `HotkeyListener` stayed live, so pressing the *current* hotkey during capture could start an utterance. Added `HotkeyListener.suspend()/resume()` (a `_suspended` flag short-circuits `_press`/`_release` + `reset()`), threaded `suspend_hotkey`/`resume_hotkey` from `app._handle` → `Overlay.open_settings` → `SettingsDialog`, and bracketed capture with them (`_end_capture` guarantees resume on finish/cancel/close). Test: `test_suspend_ignores_keys_then_resume_restores`.
+2. **Capture cancel + modifier-only.** Esc now cancels (restores the prior combo); a non-modifier commits immediately; a modifier-only chord (e.g. Ctrl+Shift) commits on full release. `seen` accumulates the chord across partial releases; `_capturing` dedupes overlapping press+release commits.
+3. **Mid-reconnect decline.** `start_utterance` now gates on `_ws_is_open` (state == OPEN), not `ws is None` — during reconnect `self.ws` is the old *closed* socket, so the None-check let a doomed send raise a raw-exception error popup. Deliberate key-press → gentle `("error", "Reconnecting…")` (`notify_unavailable=True` from `_hotkey_down`); wake false-positive stays silent. Tests added.
+4. **Settings single-instance.** `Overlay.open_settings` re-focuses a live dialog instead of stacking a new one. Smoke-tested (`probe_settings_guard.py`).
+
+**Verified:** `pytest tests/` 21 passed (+4); all modules `py_compile` clean; settings-guard probe. **Deferred still:** only the optional popup-motion polish, gated on the human smoothness check (Testing.md). **Manual-test needed:** the capture UX (Esc / modifier-only / no-interference) — can't be unit-tested through a real pynput+Tk dialog; logged in Testing.md.

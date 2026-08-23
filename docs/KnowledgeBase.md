@@ -2,7 +2,7 @@
 
 _The distilled MODEL: how AssistKey actually behaves. Every claim tagged FACT / HYPOTHESIS / ASSUMPTION / UNKNOWN. Read this first for behaviour/design reasoning. Numbers owned by code live in code — this points to them. Rules: ~/.claude/CLAUDE.md §5._
 
-_Last verified: 2026-08-23 — hardening pass recorded (wake pause/resume, atomic save, pump robustness)._
+_Last verified: 2026-08-23 — UX pass recorded (hotkey capture, settings single-instance, mid-reconnect decline)._
 
 ## Architecture
 
@@ -28,6 +28,13 @@ _Last verified: 2026-08-23 — hardening pass recorded (wake pause/resume, atomi
 - **FACT** — Push-to-talk: mic opens only while the hotkey is held; `signal_release` ends the utterance (true PTT, no silence detection). STT returns the user transcript once, at the end — hence "your words appear on release, not letter-by-letter" (README).
 - **FACT** — 16 kHz mono, 100 ms blocks (`SAMPLE_RATE=16000`, `BLOCK=1600`). `COMPLETION_TIMEOUT=60 s`, `MAX_RECORD=120 s` hard cap.
 - **FACT** — Device lists prefer WASAPI to de-duplicate Windows' multi-host-API device explosion (`_list_devices`).
+- **FACT** — `start_utterance` gates on `_ws_is_open(self.ws)` (socket present AND `state.name == "OPEN"`), not `ws is None`: during a reconnect `self.ws` is the previous *closed* socket, so a None-check would let a doomed send through and surface a raw-exception error popup. A deliberate key-press while unavailable passes `notify_unavailable=True` → a gentle `("error", "Reconnecting…")`; a wake false-positive stays silent (`("done",)`). Test: `tests/test_assist_client.py`.
+
+## Settings dialog (`overlay.py` — `SettingsDialog`)
+
+- **FACT** (gotcha) — During hotkey capture ("Change…") a SECOND `pynput.keyboard.Listener` runs alongside the app's global `HotkeyListener`. Both see every key, so capture calls `suspend_hotkey`/`resume_hotkey` (wired to `app.HotkeyListener.suspend`/`resume`) to stop the global one firing an utterance mid-capture. Any new capture path must keep that pair balanced (resume on finish/cancel/close) — `_end_capture` centralises it.
+- **FACT** — Capture: Esc cancels (restores the prior combo); a non-modifier key commits immediately; a modifier-only combo (e.g. Ctrl+Shift) commits when all keys are released. `seen` accumulates across partial releases so the full chord is captured. `_capturing` guards against a double-commit from overlapping press+release schedules.
+- **FACT** — `Overlay.open_settings` is single-instance: it keeps `self._settings` and re-focuses a live dialog instead of stacking a new one (stale ref when the window is gone → builds fresh). Test: `probe_settings_guard.py` pattern.
 
 ## Wake word (`wake.py`)
 

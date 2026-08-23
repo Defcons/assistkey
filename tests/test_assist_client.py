@@ -26,3 +26,40 @@ def test_start_utterance_when_active_stays_silent():
     client.ws = object()  # non-None so we'd proceed if the active-guard were wrong
     asyncio.run(client.start_utterance())
     assert emitted == []
+
+
+class _FakeState:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeWS:
+    def __init__(self, name):
+        self.state = _FakeState(name)
+
+
+def test_ws_is_open_helper():
+    from assist_client import _ws_is_open
+    assert _ws_is_open(None) is False
+    assert _ws_is_open(_FakeWS("OPEN")) is True
+    assert _ws_is_open(_FakeWS("CLOSED")) is False
+    assert _ws_is_open(_FakeWS("CONNECTING")) is False
+
+
+def test_start_utterance_mid_reconnect_notifies_when_interactive():
+    # Key pressed during reconnect (socket closed but not None): a deliberate
+    # press gets a gentle "Reconnecting…" instead of a raw exception popup.
+    emitted = []
+    client = AssistClient(cfg.Config(), ui=emitted.append)
+    client.ws = _FakeWS("CLOSED")
+    asyncio.run(client.start_utterance(notify_unavailable=True))
+    assert emitted and emitted[0][0] == "error"
+
+
+def test_start_utterance_mid_reconnect_silent_for_wake():
+    # A wake false-positive during reconnect should NOT flash a popup, just resync.
+    emitted = []
+    client = AssistClient(cfg.Config(), ui=emitted.append)
+    client.ws = _FakeWS("CLOSED")
+    asyncio.run(client.start_utterance())
+    assert ("done",) in emitted

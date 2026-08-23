@@ -195,6 +195,7 @@ class Overlay:
         self._timer_raised = False   # Windows 1 ms timer resolution held while animating
         self._timer_job = None
         self._body_item = None       # reply text item id, so the reveal recolours it cheaply
+        self._settings = None        # the open SettingsDialog, if any (single-instance guard)
         self._last_change = time.monotonic()
         self._watchdog()  # periodic safety net against a stuck popup
 
@@ -307,8 +308,19 @@ class Overlay:
             pass
         self.root.after(3000, self._watchdog)
 
-    def open_settings(self, client, on_save):
-        SettingsDialog(self.root, self.config, client, on_save)
+    def open_settings(self, client, on_save, suspend_hotkey=None, resume_hotkey=None):
+        # Single-instance: focus the existing dialog instead of stacking a new one.
+        if self._settings is not None:
+            try:
+                if self._settings.win.winfo_exists():
+                    self._settings.win.deiconify()
+                    self._settings.win.lift()
+                    self._settings.win.focus_force()
+                    return
+            except (tk.TclError, AttributeError):
+                pass  # stale reference (window already destroyed) — fall through
+        self._settings = SettingsDialog(self.root, self.config, client, on_save,
+                                        suspend_hotkey=suspend_hotkey, resume_hotkey=resume_hotkey)
 
     # ---- transitions --------------------------------------------------------
 
@@ -758,12 +770,16 @@ class SettingsDialog:
 
     LABEL_W = 108
 
-    def __init__(self, root, config: cfg.Config, client, on_save):
+    def __init__(self, root, config: cfg.Config, client, on_save,
+                 suspend_hotkey=None, resume_hotkey=None):
         self.config = config
         self.client = client
         self.on_save = on_save
         self.pending_hotkey = list(config.hotkey)
         self._capture_listener = None
+        self._capturing = False
+        self._suspend_hotkey = suspend_hotkey or (lambda: None)
+        self._resume_hotkey = resume_hotkey or (lambda: None)
 
         win = ctk.CTkToplevel(root)
         self.win = win
@@ -986,29 +1002,62 @@ class SettingsDialog:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    _MODS = ("ctrl", "alt", "shift", "cmd")
+
     def _capture_hotkey(self):
-        self.capture_btn.configure(text="Press keys…", state="disabled")
+        self.capture_btn.configure(text="Press keys — Esc cancels", state="disabled")
         self.hotkey_var.set("…")
-        pressed: set[str] = set()
+        self._capturing = True
+        self._suspend_hotkey()   # don't let the live global hotkey fire while capturing
+        held: set[str] = set()
+        seen: set[str] = set()   # every key touched this chord (survives partial releases)
 
         def on_press(key):
             canon = cfg.key_to_canon(key)
-            pressed.add(canon)
-            if canon not in ("ctrl", "alt", "shift", "cmd"):
-                combo = list(pressed)
+            if canon == "esc":
+                self.win.after(0, self._cancel_capture)
+                return False
+            held.add(canon)
+            seen.add(canon)
+            if canon not in self._MODS:  # a real key -> commit immediately
+                combo = list(seen)
                 self.win.after(0, lambda: self._finish_capture(combo))
                 return False
             return None
 
-        self._capture_listener = kb.Listener(on_press=on_press)
+        def on_release(key):
+            held.discard(cfg.key_to_canon(key))
+            # All keys released with only modifiers pressed -> commit a modifier-only combo.
+            if not held and seen and all(k in self._MODS for k in seen):
+                combo = list(seen)
+                self.win.after(0, lambda: self._finish_capture(combo))
+                return False
+            return None
+
+        self._capture_listener = kb.Listener(on_press=on_press, on_release=on_release)
         self._capture_listener.start()
 
-    def _finish_capture(self, combo):
+    def _end_capture(self):
         if self._capture_listener is not None:
             self._capture_listener.stop()
             self._capture_listener = None
+        if self._capturing:
+            self._capturing = False
+            self._resume_hotkey()
+
+    def _finish_capture(self, combo):
+        if not self._capturing:
+            return  # already handled (guards a double schedule from press+release)
+        self._end_capture()
         self.pending_hotkey = combo
         self.hotkey_var.set(cfg.hotkey_label(combo))
+        self.capture_btn.configure(text="Change…", state="normal")
+
+    def _cancel_capture(self):
+        if not self._capturing:
+            return
+        self._end_capture()
+        self.hotkey_var.set(cfg.hotkey_label(self.pending_hotkey))  # restore the previous combo
         self.capture_btn.configure(text="Change…", state="normal")
 
     def _value_for(self, mapping, var):
@@ -1035,7 +1084,5 @@ class SettingsDialog:
         self._close()
 
     def _close(self):
-        if self._capture_listener is not None:
-            self._capture_listener.stop()
-            self._capture_listener = None
+        self._end_capture()  # stop any capture listener + resume the global hotkey
         self.win.destroy()

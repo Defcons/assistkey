@@ -53,3 +53,17 @@ def test_toggle_mark_idle_resyncs():
     hk._press(Key.f9)
     hk._release(Key.f9)      # should be down again, not up
     assert log == ["down", "down"]
+
+
+def test_suspend_ignores_keys_then_resume_restores():
+    # While Settings captures a new hotkey the global listener is suspended, so
+    # pressing the current hotkey there must not start an utterance.
+    hk, log = _make("hold")
+    hk.suspend()
+    hk._press(Key.f9)
+    hk._release(Key.f9)
+    assert log == []
+    hk.resume()
+    hk._press(Key.f9)
+    hk._release(Key.f9)
+    assert log == ["down", "up"]
