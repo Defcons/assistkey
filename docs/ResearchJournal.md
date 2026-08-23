@@ -1,6 +1,6 @@
 # ResearchJournal — AssistKey
 
-_Append-only chronological ledger: what changed, what was tested, what was learned. Old entries are never rewritten; durable confirmed facts get promoted to KnowledgeBase. Rules: ~/.claude/CLAUDE.md §5._
+_Append-only chronological ledger: what changed, what was tested, what was learned. Old entries are never rewritten; durable confirmed facts get promoted to KnowledgeBase._
 
 ---
 
@@ -25,7 +25,7 @@ Root cause: Windows' ~15.6 ms default timer granularity rounds `after(16)` up, a
 
 **Not verified:** on-screen visual smoothness by a human — didn't launch the full app because `kill_previous_instances()` would kill the user's running copy and grab the mic/hotkey. Logged in `Testing.md`.
 
-**Also this session:** seeded the six-doc repo bible (was absent) — small-repo mode: `OrientationMap.md` at root, this + KnowledgeBase/ToDo/Testing in `docs/`.
+**Also this session:** seeded the project documentation set — small-repo layout: `OrientationMap.md` at root, this + KnowledgeBase/ToDo/Testing in `docs/`.
 
 ---
 

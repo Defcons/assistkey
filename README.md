@@ -12,6 +12,11 @@ is spoken aloud.
 > Works with any Home Assistant [Assist pipeline](https://www.home-assistant.io/voice_control/):
 > local Whisper/Piper, cloud, or an LLM conversation agent — whatever you've set up.
 
+> **This is a desktop app for your PC — not a Home Assistant add-on or HACS
+> integration.** Nothing is installed inside Home Assistant; it connects to HA's
+> WebSocket API over your network, so it works with HA OS, Container, Supervised,
+> or Core.
+
 ![A reply popup](docs/popup.png)
 
 ## Features
@@ -72,6 +77,11 @@ On first run the **Settings** dialog opens automatically. Enter your:
    capture over plain `http`.
 2. **Access token** — in Home Assistant, click your profile (bottom-left) →
    **Long-lived access tokens** → **Create token**.
+
+> **Security tip:** create the token under a *dedicated* Home Assistant user
+> (Settings → People → Users) instead of your admin account — then you can revoke
+> just this app's access without touching anything else. AssistKey stores the
+> token **encrypted at rest** (Windows DPAPI, tied to your user account).
 
 Click **Test connection** to verify, then **Save**. You're ready — **hold F9**
 and speak.

@@ -1,6 +1,6 @@
 # Testing — AssistKey
 
-_STRICT pending-manual-test queue. Each entry: repro steps + explicit pass criteria (runnable COLD, weeks later) + what's already machine-verified. Confirmed → graduate the durable result to KnowledgeBase/Journal and DELETE the entry. Rules: ~/.claude/CLAUDE.md §5._
+_STRICT pending-manual-test queue. Each entry: repro steps + explicit pass criteria (runnable COLD, weeks later) + what's already machine-verified. Confirmed → graduate the durable result to KnowledgeBase/Journal and DELETE the entry._
 
 _Last updated: 2026-08-23_
 

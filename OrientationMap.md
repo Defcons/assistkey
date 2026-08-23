@@ -5,11 +5,11 @@ _Last verified: 2026-08-23 — feature pass: barge-in, follow-up, mic meter, tra
 ## What this is
 A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hotkey → talk → release; always-on-top toast shows Listening → your words → the streaming reply, which is also spoken. Python 3.12+ / tkinter + customtkinter, asyncio HA WebSocket, pynput hotkey, pystray tray. Entry: `app.py` (run via `AssistKey.vbs` silent or `run.bat` with a console).
 
-## The repo bible (this file is one of six — §5)
-- **`OrientationMap.md`** (this) = injected hub: shape, subsystem index, global landmines. Small repo ⇒ domain detail is inline here (no NavigationMap yet; split out when this nears ~20 KB).
-- **`docs/KnowledgeBase.md`** = the MODEL: FACT/HYP-tagged behaviour (animation timing facts, pipeline, threads). Read first for behaviour/design.
-- **`docs/ResearchJournal.md`** = HISTORY: how each fact was learned.
-- **`docs/ToDo.md`** = deferral ledger. **`docs/Testing.md`** = pending human verdicts.
+## Project documentation
+- **`OrientationMap.md`** (this) = the map: project shape, subsystem index, global landmines. Small repo ⇒ per-domain detail is inline here.
+- **`docs/KnowledgeBase.md`** = how it behaves: facts/assumptions about the animation, pipeline, threads. Read first for behaviour/design.
+- **`docs/ResearchJournal.md`** = history: how each fact was learned.
+- **`docs/ToDo.md`** = deferred work. **`docs/Testing.md`** = checks still needing manual verification.
 
 ## Layout & conventions
 - Flat repo, ~6 modules at root; automated tests in `tests/`; screenshots in `docs/`.

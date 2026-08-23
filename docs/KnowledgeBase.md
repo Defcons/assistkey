@@ -1,6 +1,6 @@
 # KnowledgeBase — AssistKey
 
-_The distilled MODEL: how AssistKey actually behaves. Every claim tagged FACT / HYPOTHESIS / ASSUMPTION / UNKNOWN. Read this first for behaviour/design reasoning. Numbers owned by code live in code — this points to them. Rules: ~/.claude/CLAUDE.md §5._
+_The distilled MODEL: how AssistKey actually behaves. Every claim tagged FACT / HYPOTHESIS / ASSUMPTION / UNKNOWN. Read this first for behaviour/design reasoning. Numbers owned by code live in code — this points to them._
 
 _Last verified: 2026-08-23 — feature pass recorded (barge-in, follow-up, mic meter, tray colour, DPAPI token, autostart, rotating log, exe, CI)._
 
