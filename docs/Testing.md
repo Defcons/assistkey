@@ -59,3 +59,11 @@ All are machine-verified where possible (29 unit tests, build+launch of the exe)
 7. **Start at login** — Settings → Startup → toggle ON → Save. Check `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` has an `AssistKey` value; sign out/in → app starts silently. Toggle OFF → value removed.
 8. **Standalone exe** — on a machine WITHOUT the dev venv, run `dist\AssistKey.exe`: tray app starts, Settings opens, hold-to-talk works, wake-word downloads its model on first enable. (Build with `build.bat`.)
 9. **Rotating log** — force an error (e.g. bad token so a traceback logs), relaunch, confirm the prior log is preserved as `assistkey.log.1`.
+
+---
+
+## PENDING — QA round (2026-08-23): hotkey capture, tray click, follow-up
+
+1. **Hotkey suppression** — with the app running and hotkey = a normal key (e.g. `K`): focus a text field in another app, hold the hotkey to talk → the field must NOT receive "KKKK". Other keys type normally. ⚠ The captured key is unusable elsewhere while running — if you need to type it, pick an F-key hotkey. For a combo (e.g. Ctrl+Space): Ctrl still works alone (Ctrl+C etc.), only the full combo is swallowed.
+2. **Tray click → Settings** — double-click the tray icon (single-click where the OS supports it) opens Settings; right-click still shows the menu.
+3. **Follow-up on a question** — with Follow-up ON, trigger a request the agent can't parse so it replies with a question ("What did you mean?"). The app should auto-listen for your answer (reply ends with "?"). Statements ("Turned on the lights.") should NOT re-listen.

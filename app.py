@@ -15,6 +15,7 @@ GUI via a thread-safe queue polled with root.after.
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import os
 import queue
 import subprocess
@@ -37,6 +38,42 @@ from wake import WakeListener
 IDLE_COL = (154, 160, 166)         # connected, ready
 ACTIVE_COL = (129, 201, 149)       # listening / working
 DISCONNECTED_COL = (200, 110, 100)  # not connected to Home Assistant
+
+# --- hotkey key-suppression: virtual-key codes so the PTT key doesn't leak to other apps ---
+_VK_SCAN = ctypes.windll.user32.VkKeyScanW
+_VK_SCAN.argtypes = [ctypes.c_wchar]
+_VK_SCAN.restype = ctypes.c_short
+_VK_MODS = {"ctrl": (0x11, 0xA2, 0xA3), "alt": (0x12, 0xA4, 0xA5),
+            "shift": (0x10, 0xA0, 0xA1), "cmd": (0x5B, 0x5C)}
+_VK_SPECIAL = {"space": 0x20, "esc": 0x1B, "tab": 0x09, "enter": 0x0D,
+               "backspace": 0x08, "delete": 0x2E}
+
+
+def _canon_to_vks(token: str) -> set[int]:
+    """Virtual-key code(s) a canonical hotkey token can arrive as (for suppression)."""
+    if token in _VK_MODS:
+        return set(_VK_MODS[token])
+    if token in _VK_SPECIAL:
+        return {_VK_SPECIAL[token]}
+    if len(token) >= 2 and token[0] == "f" and token[1:].isdigit():
+        n = int(token[1:])
+        if 1 <= n <= 24:
+            return {0x70 + n - 1}          # VK_F1..VK_F24
+    if token.startswith("vk") and token[2:].isdigit():
+        return {int(token[2:])}
+    if len(token) == 1:
+        ch = token
+        if "a" <= ch <= "z":
+            return {ord(ch.upper())}
+        if "0" <= ch <= "9":
+            return {ord(ch)}
+        try:
+            res = _VK_SCAN(ch)             # layout-aware; low byte is the vk
+            if res != -1:
+                return {res & 0xFF}
+        except Exception:  # noqa: BLE001
+            pass
+    return set()
 
 
 def kill_previous_instances():
@@ -107,15 +144,58 @@ class HotkeyListener:
         self._latched = False   # current physical hold already acted on
         self._talking = False   # an utterance is currently open
         self._suspended = False  # ignore all keys (while Settings captures a new hotkey)
-        self._listener = kb.Listener(on_press=self._press, on_release=self._release)
+        self._vk_to_canon: dict[int, str] = {}   # hotkey vks -> canon, for suppression
+        self._hotkey_canon: frozenset[str] = frozenset()
+        self._held_canon: set[str] = set()
+        self._refresh_suppress()
+        self._listener = kb.Listener(on_press=self._press, on_release=self._release,
+                                     win32_event_filter=self._win32_filter)
 
     def start(self):
         self._listener.start()
+
+    def _refresh_suppress(self):
+        """Rebuild the vk->canon map for the current hotkey and drop held state."""
+        self._hotkey_canon = self.config.hotkey_set
+        m: dict[int, str] = {}
+        for c in self._hotkey_canon:
+            for vk in _canon_to_vks(c):
+                m[vk] = c
+        self._vk_to_canon = m
+        self._held_canon.clear()
+
+    def _win32_filter(self, msg, data):
+        # Runs on pynput's hook thread BEFORE the event reaches other apps.
+        try:
+            if self._suppress_vk_event(msg, data.vkCode):
+                self._listener.suppress_event()
+        except Exception:  # noqa: BLE001 - a filter error must never break key handling
+            pass
+
+    def _suppress_vk_event(self, msg, vk) -> bool:
+        """Track held hotkey keys; return True to swallow this event from other apps.
+
+        A hotkey key is suppressed only when the REST of the combo is already held,
+        so a single-key hotkey is always captured, but a modifier used in a combo
+        (e.g. Ctrl in Ctrl+Space) still works normally on its own.
+        """
+        c = self._vk_to_canon.get(vk)
+        if c is None or self._suspended:
+            return False
+        down = msg in (0x0100, 0x0104)   # WM_KEYDOWN / WM_SYSKEYDOWN
+        up = msg in (0x0101, 0x0105)     # WM_KEYUP / WM_SYSKEYUP
+        engaged = (self._hotkey_canon - {c}) <= self._held_canon
+        if down:
+            self._held_canon.add(c)
+        elif up:
+            self._held_canon.discard(c)
+        return engaged and (down or up)
 
     def reset(self):
         self._pressed.clear()
         self._latched = False
         self._talking = False
+        self._refresh_suppress()
 
     def suspend(self):
         """Stop reacting to keys — used while the Settings dialog is capturing a
@@ -185,7 +265,8 @@ class App:
         self.icon = pystray.Icon(
             "assistkey", make_icon(DISCONNECTED_COL), "AssistKey",
             menu=pystray.Menu(
-                pystray.MenuItem("Settings…", lambda: self.ui_queue.put(("open_settings",))),
+                pystray.MenuItem("Settings…", lambda: self.ui_queue.put(("open_settings",)),
+                                 default=True),  # clicking the tray icon opens Settings
                 pystray.MenuItem("Stop", lambda: self.ui_queue.put(("cancel",))),
                 pystray.MenuItem("Quit", lambda: self.ui_queue.put(("quit",))),
             ),

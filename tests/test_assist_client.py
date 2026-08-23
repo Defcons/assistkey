@@ -90,3 +90,12 @@ def test_request_cancel_safe_without_loop(monkeypatch):
     client.loop = None
     client.request_cancel()   # must not raise even with no loop
     assert called == [True]
+
+
+def test_wants_follow_up_flag_and_question_heuristic():
+    from assist_client import AssistClient as AC
+    assert AC._wants_follow_up({"continue_conversation": True}, "Done.") is True
+    assert AC._wants_follow_up({"response": {"continue_conversation": True}}, "Done.") is True
+    assert AC._wants_follow_up({}, "What did you mean?") is True          # trailing question
+    assert AC._wants_follow_up({}, "Turned on the lights.") is False       # statement
+    assert AC._wants_follow_up({}, "") is False

@@ -248,6 +248,15 @@ class AssistClient:
         self._follow_up_requested = False
         return want
 
+    @staticmethod
+    def _wants_follow_up(io: dict, reply_text: str) -> bool:
+        """Follow-up is warranted if HA flags continue_conversation, OR the reply is
+        itself a question (e.g. 'What did you mean?') — many agents ask a clarifying
+        question without setting the flag."""
+        flagged = bool(io.get("continue_conversation")
+                       or io.get("response", {}).get("continue_conversation"))
+        return flagged or reply_text.strip().endswith("?")
+
     async def start_utterance(self, notify_unavailable: bool = False):
         if self._active:
             return  # one already running; it will emit its own ("done",)
@@ -318,6 +327,7 @@ class AssistClient:
         handler_id: int | None = None
         buffered: list[bytes] = []
         streamed_any = False
+        reply_text = ""      # accumulated reply, to detect a trailing question
 
         async def watch_release():
             await self._release.wait()
@@ -417,6 +427,7 @@ class AssistClient:
                     piece = delta.get("content")
                     if piece:
                         streamed_any = True
+                        reply_text += piece
                         self.ui(("response_append", piece))
                 elif etype == "intent-end":
                     io = data.get("intent_output", {}) or {}
@@ -424,15 +435,13 @@ class AssistClient:
                         speech = (io.get("response", {}).get("speech", {})
                                   .get("plain", {}).get("speech"))
                         if speech:
+                            reply_text = speech
                             self.ui(("response_final", speech))
                     cid = io.get("conversation_id")
                     if cid:
                         self._conversation_id = cid
                         self._conv_deadline = time.monotonic() + CONVERSATION_TTL
-                    # HA has moved this key around; check both known spots.
-                    self._follow_up_requested = bool(
-                        io.get("continue_conversation")
-                        or io.get("response", {}).get("continue_conversation"))
+                    self._follow_up_requested = self._wants_follow_up(io, reply_text)
                 elif etype == "tts-end":
                     await self._play(data["tts_output"])
                 elif etype == "error":
