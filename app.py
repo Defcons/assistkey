@@ -147,9 +147,26 @@ class HotkeyListener:
         self._vk_to_canon: dict[int, str] = {}   # hotkey vks -> canon, for suppression
         self._hotkey_canon: frozenset[str] = frozenset()
         self._held_canon: set[str] = set()
+        self._listener = None
+        self._filter_installed = False
+        self._build_listener()
+
+    def _build_listener(self):
+        """(Re)create the pynput listener. The suppressing win32 filter — a global,
+        low-level keyboard hook that can lag the WHOLE system — is wired in ONLY when
+        the user opts into capturing the hotkey (config.suppress_hotkey)."""
+        running = self._listener is not None
+        if running:
+            try:
+                self._listener.stop()
+            except Exception:  # noqa: BLE001
+                pass
         self._refresh_suppress()
-        self._listener = kb.Listener(on_press=self._press, on_release=self._release,
-                                     win32_event_filter=self._win32_filter)
+        self._filter_installed = bool(getattr(self.config, "suppress_hotkey", False))
+        kwargs = {"win32_event_filter": self._win32_filter} if self._filter_installed else {}
+        self._listener = kb.Listener(on_press=self._press, on_release=self._release, **kwargs)
+        if running:
+            self._listener.start()
 
     def start(self):
         self._listener.start()
@@ -179,6 +196,8 @@ class HotkeyListener:
         so a single-key hotkey is always captured, but a modifier used in a combo
         (e.g. Ctrl in Ctrl+Space) still works normally on its own.
         """
+        if not self.config.suppress_hotkey:
+            return False
         c = self._vk_to_canon.get(vk)
         if c is None or self._suspended:
             return False
@@ -195,7 +214,10 @@ class HotkeyListener:
         self._pressed.clear()
         self._latched = False
         self._talking = False
-        self._refresh_suppress()
+        if self._filter_installed != bool(getattr(self.config, "suppress_hotkey", False)):
+            self._build_listener()   # capture toggled on/off -> rebuild with/without the hook
+        else:
+            self._refresh_suppress()
 
     def suspend(self):
         """Stop reacting to keys — used while the Settings dialog is capturing a
@@ -254,6 +276,7 @@ class App:
         self.overlay.on_cancel = lambda: self.ui_queue.put(("cancel",))  # click popup to stop
         self.ui_queue: "queue.Queue" = queue.Queue()
         self._connected = False
+        self._follow_up_next = False   # the next Listening is an auto follow-up
 
         self.loop = asyncio.new_event_loop()
         self.client = AssistClient(self.config, ui=lambda cmd: self.ui_queue.put(cmd))
@@ -364,7 +387,9 @@ class App:
                 self._set_idle_icon()
         elif name == "listening":
             self.icon.icon = make_icon(ACTIVE_COL)
-            self.overlay.listening()
+            follow_up = self._follow_up_next
+            self._follow_up_next = False
+            self.overlay.listening(follow_up=follow_up)
         elif name == "thinking":
             self.overlay.thinking()
         elif name == "level":
@@ -386,7 +411,9 @@ class App:
             self.overlay.error(args[0])
         elif name == "done":
             if self.client.consume_follow_up():
-                # HA asked to continue: keep wake paused, auto-listen (VAD-ended).
+                # HA asked to continue: keep wake paused, auto-listen (VAD-ended),
+                # and mark the next Listening popup as a follow-up so it's clearly labelled.
+                self._follow_up_next = True
                 asyncio.run_coroutine_threadsafe(self.client.start_utterance(), self.loop)
             else:
                 self._set_idle_icon()

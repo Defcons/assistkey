@@ -199,6 +199,9 @@ class Overlay:
         self._body_item = None       # reply text item id, so the reveal recolours it cheaply
         self._settings = None        # the open SettingsDialog, if any (single-instance guard)
         self._level = 0.0            # 0..1 mic level for the Listening meter
+        self._level_item = None      # the level-bar fill rect, updated cheaply per frame
+        self._level_geom = None
+        self._follow_up = False      # this Listening popup is an automatic follow-up
         self.on_cancel = None        # set by the app: click the popup to stop / cancel
         self._last_change = time.monotonic()
         self._watchdog()  # periodic safety net against a stuck popup
@@ -208,20 +211,28 @@ class Overlay:
 
     # ---- public API (main thread) ------------------------------------------
 
-    def listening(self):
+    def listening(self, follow_up=False):
         self._cancel_dismiss()
         self._user_text = ""
         self._response = ""
         self._level = 0.0
+        self._follow_up = follow_up
         self._touch()
         self._enter(LISTENING)
 
     def set_level(self, v):
-        """Feed the Listening mic meter (0..1). Attack fast, release slow."""
+        """Feed the Listening mic meter (0..1). Attack fast, release slow. Updates
+        only the bar rectangle — no full redraw — so it stays cheap at ~10/s."""
         v = max(0.0, min(1.0, float(v)))
         self._level = v if v > self._level else self._level * 0.6 + v * 0.4
-        if self._state == LISTENING and self._shown and not self._animating:
-            self._refresh()
+        if (self._state == LISTENING and self._shown and not self._animating
+                and self._level_item is not None):
+            try:
+                x0, y, x1, h = self._level_geom
+                w = (x1 - x0) * self._level
+                self.canvas.coords(self._level_item, x0, y, x0 + max(0.001, w), y + h)
+            except (tk.TclError, TypeError, ValueError):
+                pass
 
     def _on_click(self, _e=None):
         # Click the popup to stop a run in progress (barge-in / dismiss a wake mis-fire).
@@ -454,11 +465,19 @@ class Overlay:
         c = self.canvas
         c.delete("all")
         self._body_item = None
+        self._level_item = None
         y = PAD
         st = self._state
 
         if st == LISTENING:
-            y = self._status_row(y, "Listening", self._pulse_colour())
+            y = self._status_row(y, "Follow-up" if self._follow_up else "Listening",
+                                 self._pulse_colour())
+            if self._follow_up:
+                item = c.create_text(WIDTH / 2, y + 6, anchor="n",
+                                     text="answer now — no need to press the key",
+                                     fill=MUTED, font=FONT_USER,
+                                     width=WIDTH - 2 * PAD, justify="center")
+                y = c.bbox(item)[3]
             y = self._level_bar(y + 12)
         elif st == THINKING:
             y = self._status_row(y, "Thinking", ACCENT)
@@ -510,8 +529,9 @@ class Overlay:
         h = 6
         c.create_rectangle(x0, y, x1, y + h, fill=REVEAL_FROM, outline="")  # track
         w = (x1 - x0) * max(0.0, min(1.0, self._level))
-        if w >= 1:
-            c.create_rectangle(x0, y, x0 + w, y + h, fill=ACCENT, outline="")  # fill
+        self._level_item = c.create_rectangle(x0, y, x0 + max(0.001, w), y + h,
+                                              fill=ACCENT, outline="")       # fill (updated live)
+        self._level_geom = (x0, y, x1, h)
         return y + h
 
     # ---- geometry -----------------------------------------------------------
@@ -872,6 +892,13 @@ class SettingsDialog:
                    "combination you want (e.g. F9, or Ctrl+Space).")
         for _w in (hk_label, hk_box, self.capture_btn):
             _Tooltip(_w, _hk_tip)
+        self.suppress_var = self._toggle_row(
+            body, "Capture key", config.suppress_hotkey,
+            tip="Stop the hotkey from doing anything in other apps while AssistKey runs "
+                "(so holding it won't type in a text field elsewhere).\n\n"
+                "⚠ This installs a global keyboard hook that can make typing/input feel "
+                "laggy on some PCs. Leave OFF unless you need it — and turn it off if you "
+                "notice lag. A key you don't otherwise type (e.g. F9) is safest.")
 
         self.trigger_map = [("Hold to talk", "hold"), ("Tap to toggle", "toggle")]
         self.trigger_var = tk.StringVar()
@@ -1131,6 +1158,7 @@ class SettingsDialog:
         self.config.popup_monitor = self._value_for(self.screen_map, self.screen_var) or "primary"
         self.config.dismiss_seconds = float(max(2, int(self.dismiss_var.get())))
         self.config.follow_up_enabled = bool(self.followup_var.get())
+        self.config.suppress_hotkey = bool(self.suppress_var.get())
         self.config.save()
         autostart.set_enabled(bool(self.autostart_var.get()))  # system setting, not in config.json
         self.on_save()

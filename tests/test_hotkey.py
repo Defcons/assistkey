@@ -79,7 +79,7 @@ def test_canon_to_vks_maps_common_keys():
 
 
 def test_single_key_hotkey_is_always_suppressed():
-    c = cfg.Config(hotkey=["k"])
+    c = cfg.Config(hotkey=["k"], suppress_hotkey=True)
     hk = HotkeyListener(c, on_down=lambda: None, on_up=lambda: None)
     vk = ord("K")
     assert hk._suppress_vk_event(0x0100, vk) is True   # keydown suppressed
@@ -88,7 +88,7 @@ def test_single_key_hotkey_is_always_suppressed():
 
 
 def test_combo_modifier_passes_through_until_engaged():
-    c = cfg.Config(hotkey=["ctrl", "space"])
+    c = cfg.Config(hotkey=["ctrl", "space"], suppress_hotkey=True)
     hk = HotkeyListener(c, on_down=lambda: None, on_up=lambda: None)
     CTRL, SPACE = 0xA2, 0x20
     # Ctrl alone must NOT be suppressed (Ctrl+C etc. still work)
@@ -101,7 +101,15 @@ def test_combo_modifier_passes_through_until_engaged():
 
 
 def test_suspended_listener_suppresses_nothing():
-    c = cfg.Config(hotkey=["k"])
+    c = cfg.Config(hotkey=["k"], suppress_hotkey=True)
     hk = HotkeyListener(c, on_down=lambda: None, on_up=lambda: None)
     hk.suspend()
+    assert hk._suppress_vk_event(0x0100, ord("K")) is False
+
+
+def test_capture_off_by_default_installs_no_hook_and_suppresses_nothing():
+    # Default: no global keyboard hook (that caused system-wide lag), nothing captured.
+    c = cfg.Config(hotkey=["k"])   # suppress_hotkey defaults False
+    hk = HotkeyListener(c, on_down=lambda: None, on_up=lambda: None)
+    assert hk._filter_installed is False
     assert hk._suppress_vk_event(0x0100, ord("K")) is False

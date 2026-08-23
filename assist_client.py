@@ -140,7 +140,13 @@ class AssistClient:
         return self._next_id
 
     async def force_reconnect(self):
-        """Drop the socket so pump() reconnects, re-reading credentials/config."""
+        """Reconnect ONLY if the credentials changed. A plain settings save (popup
+        timing, hotkey, wake word, …) must not drop a healthy connection — doing so
+        made every Save strand the app for seconds while it reconnected."""
+        url, token = self.config.credentials()
+        url = url.rstrip("/")
+        if _ws_is_open(self.ws) and url == self.server and token == self.token:
+            return  # nothing connection-relevant changed; keep the live socket
         if self.ws is not None:
             try:
                 await self.ws.close()
@@ -214,14 +220,14 @@ class AssistClient:
                 await self._reconnect()
 
     async def _reconnect(self):
-        delay = 2
+        delay = 1
         while True:
-            await asyncio.sleep(delay)
             try:
-                await self.connect()
+                await self.connect()          # try immediately — a healthy reconnect is instant
                 await self.load_pipelines()
                 return
             except Exception:  # noqa: BLE001 - keep retrying with backoff
+                await asyncio.sleep(delay)
                 delay = min(delay * 2, 30)
 
     # ---- utterance ----------------------------------------------------------

@@ -67,3 +67,14 @@ All are machine-verified where possible (29 unit tests, build+launch of the exe)
 1. **Hotkey suppression** — with the app running and hotkey = a normal key (e.g. `K`): focus a text field in another app, hold the hotkey to talk → the field must NOT receive "KKKK". Other keys type normally. ⚠ The captured key is unusable elsewhere while running — if you need to type it, pick an F-key hotkey. For a combo (e.g. Ctrl+Space): Ctrl still works alone (Ctrl+C etc.), only the full combo is swallowed.
 2. **Tray click → Settings** — double-click the tray icon (single-click where the OS supports it) opens Settings; right-click still shows the menu.
 3. **Follow-up on a question** — with Follow-up ON, trigger a request the agent can't parse so it replies with a question ("What did you mean?"). The app should auto-listen for your answer (reply ends with "?"). Statements ("Turned on the lights.") should NOT re-listen.
+
+---
+
+## PENDING — perf fixes + capture opt-in (2026-08-23, after system-lag report)
+
+**Context:** the always-on hotkey-suppression hook was lagging the whole PC; capture is now OFF by default and the reconnect-on-save stall is fixed.
+
+1. **No system lag by default** — with the app running (Capture key OFF, the default), typing anywhere in Windows must feel completely normal (the global keyboard hook is no longer installed).
+2. **Save is instant** — change a non-connection setting (e.g. Dismiss after) → Save → the app stays connected (tray stays grey) and works immediately; no multi-second stall. Changing the URL/token still reconnects, but promptly.
+3. **Capture key toggle** (Settings → Voice → Capture key) — turning it ON installs the hook and captures the hotkey (hold it in a text field → nothing types). If typing feels laggy with it on, that's the known cost — turn it back off. Toggling it Save-to-Save should take effect without restarting.
+4. **Follow-up is labelled** — with Follow-up ON and a reply that's a question, the auto re-listen popup reads **"Follow-up — answer now"** (not "Listening"), so it's clear it opened the mic on its own.
