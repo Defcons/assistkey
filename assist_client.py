@@ -277,7 +277,9 @@ class AssistClient:
         emits normally."""
         if self._suppress_next_done:
             self._suppress_next_done = False
+            log.info("done suppressed (restart hand-off)")
         else:
+            log.info("emitting done")
             self.ui(("done",))
 
     def consume_follow_up(self) -> bool:
@@ -501,11 +503,15 @@ class AssistClient:
                         self._conv_deadline = time.monotonic() + CONVERSATION_TTL
                     self._follow_up_requested = self._wants_follow_up(io, reply_text)
                 elif etype == "tts-end":
+                    log.info("tts-end received; starting playback")
+                    t_play_start = time.monotonic()
                     await self._play(data["tts_output"])
+                    log.info("tts playback finished (%.2fs)", time.monotonic() - t_play_start)
                 elif etype == "error":
                     self.ui(("error", data.get("message", "pipeline error")))
                     stop_capture.set()
                 elif etype == "run-end":
+                    log.info("run-end received")
                     break
         finally:
             finished.set()

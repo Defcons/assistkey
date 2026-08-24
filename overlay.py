@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import logging
 import threading
 import time
 from ctypes import wintypes
@@ -23,6 +24,8 @@ from pynput import keyboard as kb
 import autostart
 import config as cfg
 from assist_client import list_input_devices, list_output_devices, test_credentials
+
+log = logging.getLogger("assistkey.overlay")
 from wake import WAKE_WORDS
 
 ctk.set_appearance_mode("dark")
@@ -191,6 +194,7 @@ class Overlay:
         self._pulse_job = None
         self._slide_job = None
         self._dismiss_job = None
+        self._dismiss_at = None  # monotonic time the current dismiss timer targets, for logging
         self._hardhide_job = None
         self._reveal = 1.0       # 0..1 soft fade-in of reply text
         self._reveal_job = None
@@ -281,6 +285,7 @@ class Overlay:
         self._schedule_dismiss()
 
     def hide(self):
+        log.info("hide() firing (state=%s)", self._state)
         self._cancel_dismiss()
         self._enter(HIDDEN)
         self._arm_hardhide(VANISH_MS + 500)  # guarantee withdrawal even if animation wedges
@@ -330,7 +335,15 @@ class Overlay:
         try:
             if self._shown and self._state != LISTENING:
                 limit = 90 if self._state == THINKING else self.config.dismiss_seconds + 20
-                if time.monotonic() - self._last_change > limit:
+                elapsed = time.monotonic() - self._last_change
+                if elapsed > limit:
+                    # This should be rare: the normal dismiss timer (_schedule_dismiss)
+                    # is meant to have hidden it long before this fires. If you're
+                    # reading this in the log, THIS — not the configured dismiss delay —
+                    # is why the popup stayed up so long; it means "done" never reached
+                    # done()/hide() for this popup.
+                    log.warning("watchdog force-hiding a stuck %s popup after %.1fs (limit %.1fs)",
+                               self._state, elapsed, limit)
                     self._hard_hide()
         except Exception:  # noqa: BLE001 - a watchdog must never throw
             pass
@@ -676,10 +689,18 @@ class Overlay:
     def _schedule_dismiss(self):
         self._cancel_dismiss()
         ms = int(self.config.dismiss_seconds * 1000)
+        self._dismiss_at = time.monotonic() + ms / 1000
+        log.info("dismiss scheduled: hide() in %d ms (state=%s)", ms, self._state)
         self._dismiss_job = self.root.after(ms, self.hide)
 
     def _cancel_dismiss(self):
         if self._dismiss_job is not None:
+            if self._dismiss_at is not None:
+                remaining = self._dismiss_at - time.monotonic()
+                if remaining > 0.05:  # >just the routine self-cleanup when hide() itself fires
+                    log.info("dismiss interrupted %.2fs early by a new state (was state=%s)",
+                             remaining, self._state)
+            self._dismiss_at = None
             self.root.after_cancel(self._dismiss_job)
             self._dismiss_job = None
 

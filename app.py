@@ -323,9 +323,11 @@ class App:
             if self.client.consume_follow_up():
                 # HA asked to continue: keep wake paused, auto-listen (VAD-ended),
                 # and mark the next Listening popup as a follow-up so it's clearly labelled.
+                log.info("done -> follow-up, auto-listening again")
                 self._follow_up_next = True
                 asyncio.run_coroutine_threadsafe(self.client.start_utterance(), self.loop)
             else:
+                log.info("done -> overlay.done() (starts the dismiss timer)")
                 self._set_idle_icon()
                 self.hotkey.mark_idle()
                 self.wake.resume()

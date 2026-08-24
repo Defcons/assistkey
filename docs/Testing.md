@@ -132,3 +132,36 @@ pass. See Journal 2026-08-24 for the full trace and the race it fixed.
    also barges in and starts listening (this was extended for consistency alongside
    the hotkey fix — flag if you'd rather wake word behave differently, e.g. never
    interrupt an in-progress reply).
+
+---
+
+## PENDING — Diagnose "popup lingers way past dismiss_seconds" (2026-08-24)
+
+**Goal:** the next time this happens, `assistkey.log` should show exactly why —
+no more guessing. `dismiss_seconds` is confirmed 2.0 in config.json; the delay is
+real and needs root-causing from a live occurrence.
+
+**Repro:** use the app normally until the lingering-popup behaviour happens again
+(hopefully soon, ideally on the FIRST try after this update), then tray → **Open
+log** and find the most recent conversation's lines.
+
+**What to look for (this tells us exactly which of three explanations it is):**
+1. **`tts playback finished (%.2fs)` shows an unexpectedly large number** (much
+   longer than the reply actually sounded) → the TTS fetch/decode is slow — likely
+   explanation is a slow/flaky connection to Home Assistant for the audio file
+   itself, independent of the popup logic entirely.
+2. **A gap between `"run-end received"` and `"emitting done"`** → something in our
+   own cleanup (awaiting the audio-forwarder task) is slow — would point at
+   `assist_client.py`, not `overlay.py`.
+3. **`"watchdog force-hiding a stuck ... popup after ...s"` appears** → the normal
+   2 s dismiss never fired at all for that reply; the ~22 s watchdog is what
+   actually removed it. This is the strongest, most specific signal — if you see
+   this line, that's the bug, and the fix would be figuring out why `("done",)`
+   (or `overlay.done()`) never ran for that reply.
+4. **None of the above, chain looks normal and fast** → the delay might be
+   perceptual (e.g., a trailing silence in the generated audio clip making
+   "finished talking" later than it sounds) — worth a stopwatch check against the
+   log's own timestamps.
+
+Paste the relevant `assistkey.log` lines (they're timestamped, so no manual timing
+needed) from the incident and the actual fix follows directly from which case it is.

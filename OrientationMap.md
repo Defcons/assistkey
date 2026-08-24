@@ -1,6 +1,6 @@
 # OrientationMap — AssistKey
 
-_Last verified: 2026-08-24 — removed laggy hotkey-capture hook; added diag.py logging + a redacted GitHub issue-report action; hotkey/wake now always barge-in via restart_utterance()._
+_Last verified: 2026-08-24 — removed laggy hotkey-capture hook; diag.py logging + redacted issue reporting; barge-in via restart_utterance(); tts/dismiss/watchdog chain fully logged._
 
 ## What this is
 A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hotkey → talk → release; always-on-top toast shows Listening → your words → the streaming reply, which is also spoken. Python 3.12+ / tkinter + customtkinter, asyncio HA WebSocket, pynput hotkey, pystray tray. Entry: `app.py` (run via `AssistKey.vbs` silent or `run.bat` with a console).

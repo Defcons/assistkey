@@ -284,3 +284,50 @@ or another release. Not closed: a realistic hold-to-talk press-then-release gest
 is never that fast, and existing safety nets bound the consequence.
 
 **Verified:** 54 tests pass (+4). Full regression clean.
+
+---
+
+## 2026-08-24 — "Popup stays a lot longer than 2s after it finished talking"
+
+Confirmed `dismiss_seconds` really is 2.0 in `config.json` (ruled out empirically,
+not assumed) and the app was live/connected. Then read the actual dismiss chain
+fresh rather than trust memory from earlier in the session.
+
+**Found a real, concrete gap:** `overlay.py` had ZERO logging. There's an existing
+22 s watchdog (`_watchdog`, `dismiss_seconds + 20` for a RESPONSE/ERROR popup) whose
+entire job is to rescue a popup if the normal dismiss never fires — and it force-hides
+completely silently. If THAT'S what's actually dismissing the user's popup instead of
+the real 2 s timer, there was previously no way to know from the log.
+
+**Also found, semi-accidentally, a second real and plausible mechanism:** while
+building a verification harness, a broken TTS URL revealed that `_play()`'s HTTP
+fetch (`urlopen(..., timeout=15)`) has no faster fallback and its own generic
+`"playback failed"` warning carries no duration — so a slow or hanging TTS fetch
+silently extends how long the popup stays up (the user hears nothing, but the app is
+still internally blocked fetching/decoding) with zero visibility into how long that
+took. This is a second, independent way to produce exactly this symptom.
+
+**Fix: instrumented the full chain, not a guess-and-patch.** Added logging across
+every step from `tts-end` through to the dismiss timer actually firing:
+`assist_client`: `"tts-end received"` → `"tts playback finished (%.2fs)"` (brackets
+fetch+decode+play) → `"run-end received"` → `_emit_done`'s `"emitting done"`.
+`app.py`: `"done -> overlay.done()"`. `overlay.py` (previously silent): `"dismiss
+scheduled: hide() in %d ms"`, `"hide() firing"`, `"dismiss interrupted %.2fs early"`
+(if something re-entered before it fired), and critically the watchdog's
+`"watchdog force-hiding a stuck %s popup after %.1fs (limit %.1fs)"` — the one line
+that, if present, definitively proves the configured dismiss delay was never the
+actual bottleneck.
+
+**Verified via a probe harness** (real `_run_utterance`, faked I/O boundaries,
+pattern reused from the barge-in verification earlier today): a clean fast
+completion produced the expected chain in the right order with sane timing (0.15s);
+a broken URL concretely demonstrated the fetch-timeout blind spot (7+ seconds,
+previously invisible).
+
+**Not yet root-caused against the user's actual incident** — didn't have enough
+signal to pick between "HA-side latency," "TTS fetch/decode slowness," or "a
+genuinely stuck popup rescued by the watchdog" from code-reading alone, and
+couldn't reproduce their exact conversation/timing myself. The instrumentation
+exists so the NEXT occurrence is a direct read of assistkey.log instead of a guess.
+Tests: 54 pass (logging additions are print-only, no behavioural change to verify
+beyond the existing suite).
