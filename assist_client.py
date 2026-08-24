@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import queue
 import time
 import urllib.request
@@ -30,6 +31,8 @@ import miniaudio
 import numpy as np
 import sounddevice as sd
 import websockets
+
+log = logging.getLogger("assistkey.client")
 
 SAMPLE_RATE = 16000
 BLOCK = 1600  # 100 ms at 16 kHz
@@ -175,6 +178,7 @@ class AssistClient:
         reply = json.loads(await self.ws.recv())
         if reply.get("type") != "auth_ok":
             raise RuntimeError(f"Auth failed: {reply}")
+        log.info("connected to Home Assistant %s at %s", reply.get("ha_version"), self.server)
         self.ui(("status", f"Connected (HA {reply.get('ha_version')})"))
         self.ui(("connected",))
 
@@ -215,6 +219,7 @@ class AssistClient:
                     if q is not None:
                         await q.put(msg)
             except (websockets.ConnectionClosed, OSError) as exc:
+                log.warning("connection lost (%s); reconnecting", exc.__class__.__name__)
                 self.ui(("disconnected",))
                 self.ui(("status", f"Disconnected ({exc.__class__.__name__}); reconnecting…"))
                 await self._reconnect()
@@ -226,7 +231,8 @@ class AssistClient:
                 await self.connect()          # try immediately — a healthy reconnect is instant
                 await self.load_pipelines()
                 return
-            except Exception:  # noqa: BLE001 - keep retrying with backoff
+            except Exception as exc:  # noqa: BLE001 - keep retrying with backoff
+                log.warning("reconnect failed (%s); retrying in %ds", exc.__class__.__name__, delay)
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 30)
 
@@ -283,6 +289,7 @@ class AssistClient:
         try:
             await self._run_utterance()
         except Exception as exc:  # noqa: BLE001 - surface, don't crash the loop
+            log.exception("utterance failed")
             self.ui(("error", str(exc)))
         finally:
             self._active = False
@@ -307,6 +314,7 @@ class AssistClient:
             )
             stream.start()
         except Exception as exc:  # noqa: BLE001 - bad device index, etc.
+            log.error("mic open failed (device=%s): %s", self.config.mic_device, exc)
             self.ui(("error", f"Mic error: {exc}"))
             return
 
@@ -485,4 +493,5 @@ class AssistClient:
         try:
             await asyncio.get_running_loop().run_in_executor(None, fetch_decode_play)
         except Exception as exc:  # noqa: BLE001 - playback failure shouldn't abort the run
+            log.warning("playback failed: %s", exc)
             self.ui(("status", f"Playback error: {exc}"))

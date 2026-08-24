@@ -2,7 +2,7 @@
 
 _The distilled MODEL: how AssistKey actually behaves. Every claim tagged FACT / HYPOTHESIS / ASSUMPTION / UNKNOWN. Read this first for behaviour/design reasoning. Numbers owned by code live in code — this points to them._
 
-_Last verified: 2026-08-23 — feature pass recorded (barge-in, follow-up, mic meter, tray colour, DPAPI token, autostart, rotating log, exe, CI)._
+_Last verified: 2026-08-24 — hotkey capture removed (system-lag); diagnostics logging added._
 
 ## Architecture
 
@@ -13,9 +13,9 @@ _Last verified: 2026-08-23 — feature pass recorded (barge-in, follow-up, mic m
 - **FACT** — `config.Config.save()` is atomic (temp file + `os.replace`) — the app force-kills older instances, so a truncating write could otherwise corrupt config.json and lose the token.
 - **FACT** — `AssistClient.pump()` tolerates an unparseable frame (guards `json.loads`) and only reconnects on `ConnectionClosed`/`OSError`; other exceptions would kill the asyncio thread and zombie the app (tray alive, hotkey dead), so the parse guard matters.
 - **FACT** — Tray icon colour = state: red `DISCONNECTED_COL` (not connected), grey `IDLE_COL` (connected/ready), green `ACTIVE_COL` (listening/working). Driven by `("connected",)`/`("disconnected",)` from the client + `("listening",)`; `App._set_idle_icon` picks red vs grey from `self._connected`. Tray menu: Settings / Stop / Quit; **Settings is `default=True`** so clicking the icon opens it.
-- **FACT** (⚠ perf landmine) — Optional hotkey capture (`config.suppress_hotkey`, **default OFF**): when ON, `HotkeyListener._build_listener` wires a `win32_event_filter` into pynput and `_suppress_vk_event` calls `suppress_event()` so the PTT key can't type in other apps. This is a **global low-level keyboard hook that can lag the WHOLE system** (runs Python per keystroke under GIL contention) — that's why it's opt-in and the filter is installed ONLY when enabled (rebuild via `_build_listener` on toggle in `reset`). Suppress rule: swallow a hotkey key only when `(hotkey − {this}) ⊆ held` (single key always captured; a modifier in a combo still works alone). vk mapping via `_canon_to_vks` (punctuation via layout-aware `VkKeyScanW`). Never wire this filter unconditionally.
+- **FACT** (⚠ tried & removed) — Global hotkey *capture* (suppressing the PTT key so it can't type in other apps) was implemented with a pynput `win32_event_filter` low-level keyboard hook and **removed 2026-08-24**: it runs Python on every keystroke and lagged the user's WHOLE computer. There is no lag-free way to suppress a hold-to-talk key in this stack (`RegisterHotKey` gives no clean hold/release). Do NOT reintroduce a global suppressing keyboard hook.
 - **FACT** — Reconnect: `force_reconnect` (called on every settings Save) now drops the socket ONLY if the URL/token changed vs the live connection — a plain save keeps the connection (previously every Save stranded the app while it reconnected). `_reconnect` tries `connect()` immediately and sleeps only AFTER a failure (was: `sleep(2)` first, then exponential to 30s → up to ~60s dead after a save). A healthy reconnect is now instant.
-- **FACT** — Logs roll instead of truncating: `app._rotate_logs` keeps `assistkey.log.1..3` of previous NON-empty runs; an empty clean run isn't rolled, so the frequent kill+relaunch cycles don't spam blank history. Ignored via `assistkey.log*`.
+- **FACT** — Diagnostics (`diag.py`, `diag.setup()` at startup): one rotating file `assistkey.log` (+`.1/.2/.3`, 1 MB each, appended across runs, git-ignored `assistkey.log*`), every line timestamped with level + thread. Crash capture in EVERY thread — `sys.excepthook` (main), `threading.excepthook` (pynput/pystray/wake), `loop.set_exception_handler`→`diag.asyncio_exception_handler` (asyncio), Tk `report_callback_exception`; stdout/stderr are redirected into the log (no console under pythonw). Modules log via `logging.getLogger("assistkey.<area>")`. `diag.redact_config` logs a config snapshot with the token shown only as set/none — the **token is never written**. Tray → **Open log** opens the file. Test: `tests/test_diag.py`.
 
 ## Popup overlay animation (`overlay.py`)
 

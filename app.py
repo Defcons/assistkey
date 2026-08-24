@@ -15,7 +15,7 @@ GUI via a thread-safe queue polled with root.after.
 from __future__ import annotations
 
 import asyncio
-import ctypes
+import logging
 import os
 import queue
 import subprocess
@@ -31,49 +31,16 @@ from pynput import keyboard as kb
 import winsound
 
 import config as cfg
+import diag
 from assist_client import AssistClient
 from overlay import Overlay
 from wake import WakeListener
 
+log = logging.getLogger("assistkey.app")
+
 IDLE_COL = (154, 160, 166)         # connected, ready
 ACTIVE_COL = (129, 201, 149)       # listening / working
 DISCONNECTED_COL = (200, 110, 100)  # not connected to Home Assistant
-
-# --- hotkey key-suppression: virtual-key codes so the PTT key doesn't leak to other apps ---
-_VK_SCAN = ctypes.windll.user32.VkKeyScanW
-_VK_SCAN.argtypes = [ctypes.c_wchar]
-_VK_SCAN.restype = ctypes.c_short
-_VK_MODS = {"ctrl": (0x11, 0xA2, 0xA3), "alt": (0x12, 0xA4, 0xA5),
-            "shift": (0x10, 0xA0, 0xA1), "cmd": (0x5B, 0x5C)}
-_VK_SPECIAL = {"space": 0x20, "esc": 0x1B, "tab": 0x09, "enter": 0x0D,
-               "backspace": 0x08, "delete": 0x2E}
-
-
-def _canon_to_vks(token: str) -> set[int]:
-    """Virtual-key code(s) a canonical hotkey token can arrive as (for suppression)."""
-    if token in _VK_MODS:
-        return set(_VK_MODS[token])
-    if token in _VK_SPECIAL:
-        return {_VK_SPECIAL[token]}
-    if len(token) >= 2 and token[0] == "f" and token[1:].isdigit():
-        n = int(token[1:])
-        if 1 <= n <= 24:
-            return {0x70 + n - 1}          # VK_F1..VK_F24
-    if token.startswith("vk") and token[2:].isdigit():
-        return {int(token[2:])}
-    if len(token) == 1:
-        ch = token
-        if "a" <= ch <= "z":
-            return {ord(ch.upper())}
-        if "0" <= ch <= "9":
-            return {ord(ch)}
-        try:
-            res = _VK_SCAN(ch)             # layout-aware; low byte is the vk
-            if res != -1:
-                return {res & 0xFF}
-        except Exception:  # noqa: BLE001
-            pass
-    return set()
 
 
 def kill_previous_instances():
@@ -144,80 +111,15 @@ class HotkeyListener:
         self._latched = False   # current physical hold already acted on
         self._talking = False   # an utterance is currently open
         self._suspended = False  # ignore all keys (while Settings captures a new hotkey)
-        self._vk_to_canon: dict[int, str] = {}   # hotkey vks -> canon, for suppression
-        self._hotkey_canon: frozenset[str] = frozenset()
-        self._held_canon: set[str] = set()
-        self._listener = None
-        self._filter_installed = False
-        self._build_listener()
-
-    def _build_listener(self):
-        """(Re)create the pynput listener. The suppressing win32 filter — a global,
-        low-level keyboard hook that can lag the WHOLE system — is wired in ONLY when
-        the user opts into capturing the hotkey (config.suppress_hotkey)."""
-        running = self._listener is not None
-        if running:
-            try:
-                self._listener.stop()
-            except Exception:  # noqa: BLE001
-                pass
-        self._refresh_suppress()
-        self._filter_installed = bool(getattr(self.config, "suppress_hotkey", False))
-        kwargs = {"win32_event_filter": self._win32_filter} if self._filter_installed else {}
-        self._listener = kb.Listener(on_press=self._press, on_release=self._release, **kwargs)
-        if running:
-            self._listener.start()
+        self._listener = kb.Listener(on_press=self._press, on_release=self._release)
 
     def start(self):
         self._listener.start()
-
-    def _refresh_suppress(self):
-        """Rebuild the vk->canon map for the current hotkey and drop held state."""
-        self._hotkey_canon = self.config.hotkey_set
-        m: dict[int, str] = {}
-        for c in self._hotkey_canon:
-            for vk in _canon_to_vks(c):
-                m[vk] = c
-        self._vk_to_canon = m
-        self._held_canon.clear()
-
-    def _win32_filter(self, msg, data):
-        # Runs on pynput's hook thread BEFORE the event reaches other apps.
-        try:
-            if self._suppress_vk_event(msg, data.vkCode):
-                self._listener.suppress_event()
-        except Exception:  # noqa: BLE001 - a filter error must never break key handling
-            pass
-
-    def _suppress_vk_event(self, msg, vk) -> bool:
-        """Track held hotkey keys; return True to swallow this event from other apps.
-
-        A hotkey key is suppressed only when the REST of the combo is already held,
-        so a single-key hotkey is always captured, but a modifier used in a combo
-        (e.g. Ctrl in Ctrl+Space) still works normally on its own.
-        """
-        if not self.config.suppress_hotkey:
-            return False
-        c = self._vk_to_canon.get(vk)
-        if c is None or self._suspended:
-            return False
-        down = msg in (0x0100, 0x0104)   # WM_KEYDOWN / WM_SYSKEYDOWN
-        up = msg in (0x0101, 0x0105)     # WM_KEYUP / WM_SYSKEYUP
-        engaged = (self._hotkey_canon - {c}) <= self._held_canon
-        if down:
-            self._held_canon.add(c)
-        elif up:
-            self._held_canon.discard(c)
-        return engaged and (down or up)
 
     def reset(self):
         self._pressed.clear()
         self._latched = False
         self._talking = False
-        if self._filter_installed != bool(getattr(self.config, "suppress_hotkey", False)):
-            self._build_listener()   # capture toggled on/off -> rebuild with/without the hook
-        else:
-            self._refresh_suppress()
 
     def suspend(self):
         """Stop reacting to keys — used while the Settings dialog is capturing a
@@ -268,6 +170,7 @@ class App:
     def __init__(self):
         kill_previous_instances()  # replace any running copy (no duplicate F9 listeners)
         self.config = cfg.Config.load()
+        diag.log_config(self.config)
 
         self.root = tk.Tk()
         self.root.withdraw()
@@ -291,6 +194,7 @@ class App:
                 pystray.MenuItem("Settings…", lambda: self.ui_queue.put(("open_settings",)),
                                  default=True),  # clicking the tray icon opens Settings
                 pystray.MenuItem("Stop", lambda: self.ui_queue.put(("cancel",))),
+                pystray.MenuItem("Open log", lambda: self.ui_queue.put(("open_log",))),
                 pystray.MenuItem("Quit", lambda: self.ui_queue.put(("quit",))),
             ),
         )
@@ -310,6 +214,7 @@ class App:
 
     def _run_loop(self):
         asyncio.set_event_loop(self.loop)
+        self.loop.set_exception_handler(diag.asyncio_exception_handler)
 
         async def bootstrap():
             while True:
@@ -363,8 +268,7 @@ class App:
                 try:
                     self._handle(cmd)
                 except Exception:  # noqa: BLE001 - one bad command must not freeze the drain loop
-                    import traceback
-                    traceback.print_exc()
+                    log.exception("error handling UI command %r", cmd)
         except queue.Empty:
             pass
         self.root.after(20, self._drain)  # ALWAYS reschedule — the UI pump must never die
@@ -426,6 +330,11 @@ class App:
             self.overlay.open_settings(self.client, on_save=self._on_settings_saved,
                                        suspend_hotkey=self.hotkey.suspend,
                                        resume_hotkey=self.hotkey.resume)
+        elif name == "open_log":
+            try:
+                os.startfile(diag.LOG_PATH)  # noqa: S606 - open the log in the default viewer
+            except Exception:  # noqa: BLE001
+                log.exception("could not open log file")
         elif name == "quit":
             self._quit()
 
@@ -437,11 +346,10 @@ class App:
         asyncio.run_coroutine_threadsafe(self.client.force_reconnect(), self.loop)
 
     def _log_exception(self, exc, val, tb):
-        import traceback
-        print("--- Tk callback exception ---", file=sys.stderr)
-        traceback.print_exception(exc, val, tb, file=sys.stderr)
+        log.error("Tk callback exception", exc_info=(exc, val, tb))
 
     def _quit(self):
+        log.info("quit requested")
         try:
             self.icon.stop()
         except Exception:  # noqa: BLE001
@@ -450,45 +358,9 @@ class App:
         self.root.destroy()
 
 
-def _rotate_logs(path: Path, keep: int = 3):
-    """Preserve the previous (non-empty) log instead of truncating it on launch.
-
-    Rolls assistkey.log -> .1 -> .2 -> .3 (oldest dropped). A clean run leaves an
-    empty log, which is NOT rolled — so the frequent kill+relaunch cycles this app
-    does don't fill the history with blanks; only runs that logged something stay.
-    """
-    try:
-        if not (path.exists() and path.stat().st_size > 0):
-            return
-        oldest = path.with_name(f"{path.name}.{keep}")
-        if oldest.exists():
-            oldest.unlink()
-        for i in range(keep - 1, 0, -1):
-            src = path.with_name(f"{path.name}.{i}")
-            if src.exists():
-                src.replace(path.with_name(f"{path.name}.{i + 1}"))
-        path.replace(path.with_name(f"{path.name}.1"))
-    except OSError:
-        pass  # rotation is best-effort; never block startup
-
-
-def _setup_logging():
-    """Redirect stdout/stderr to a rolling log so nothing fails silently under pythonw."""
-    try:
-        path = Path(__file__).with_name("assistkey.log")
-        _rotate_logs(path)
-        log = path.open("w", buffering=1, encoding="utf-8")
-        sys.stdout = log
-        sys.stderr = log
-    except Exception:  # noqa: BLE001 - logging must never block startup
-        pass
-
-
 if __name__ == "__main__":
-    _setup_logging()
+    diag.setup()
     try:
         App().run()
-    except Exception:  # noqa: BLE001 - capture fatal startup errors in the log
-        import traceback
-        traceback.print_exc()
-        raise
+    except Exception:  # noqa: BLE001 - last resort: make sure the crash is in the log
+        log.exception("fatal error")

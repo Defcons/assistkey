@@ -892,13 +892,6 @@ class SettingsDialog:
                    "combination you want (e.g. F9, or Ctrl+Space).")
         for _w in (hk_label, hk_box, self.capture_btn):
             _Tooltip(_w, _hk_tip)
-        self.suppress_var = self._toggle_row(
-            body, "Capture key", config.suppress_hotkey,
-            tip="Stop the hotkey from doing anything in other apps while AssistKey runs "
-                "(so holding it won't type in a text field elsewhere).\n\n"
-                "⚠ This installs a global keyboard hook that can make typing/input feel "
-                "laggy on some PCs. Leave OFF unless you need it — and turn it off if you "
-                "notice lag. A key you don't otherwise type (e.g. F9) is safest.")
 
         self.trigger_map = [("Hold to talk", "hold"), ("Tap to toggle", "toggle")]
         self.trigger_var = tk.StringVar()
@@ -1158,7 +1151,6 @@ class SettingsDialog:
         self.config.popup_monitor = self._value_for(self.screen_map, self.screen_var) or "primary"
         self.config.dismiss_seconds = float(max(2, int(self.dismiss_var.get())))
         self.config.follow_up_enabled = bool(self.followup_var.get())
-        self.config.suppress_hotkey = bool(self.suppress_var.get())
         self.config.save()
         autostart.set_enabled(bool(self.autostart_var.get()))  # system setting, not in config.json
         self.on_save()

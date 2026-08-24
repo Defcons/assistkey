@@ -81,3 +81,35 @@ All nine recommended items, implemented + tested + documented in one pass. 29 te
 9. **PyInstaller exe** — `AssistKey.spec` + `build.bat` → `dist/AssistKey.exe` (~90 MB). Built (exit 0) and launch-tested (no import crash). Fixed `kill_previous_instances` to branch on `sys.frozen` (match `AssistKey.exe` vs venv `python*.exe`) — the venv heuristic would have mis-targeted `python.exe` under a distributed exe's folder.
 
 **Verified:** 29 tests pass; all modules `py_compile`; DPAPI/config/autostart/rotate probes; PyInstaller build + alive check. **Manual-test needed:** barge-in, level meter, follow-up, autostart checkbox, connection colour, exe on a clean machine — logged in Testing.md.
+
+---
+
+## 2026-08-24 — Removed hotkey capture (system lag); added diagnostics logging
+
+**Hotkey capture removed.** The opt-in key-suppression (pynput `win32_event_filter` +
+`suppress_event`) lagged the user's *entire computer* — a low-level keyboard hook runs
+Python on every keystroke and stalls all input under GIL contention. There is no
+lag-free way to suppress a hold-to-talk key in this stack (`RegisterHotKey` gives no
+clean hold/release), so per the user's call it was removed entirely: dropped
+`config.suppress_hotkey`, `_canon_to_vks`, `_win32_filter`/`_suppress_vk_event`/
+`_build_listener`, the Settings "Capture key" toggle, and the suppression tests.
+`HotkeyListener` is back to a plain `kb.Listener(on_press, on_release)` (the
+suspend/resume for settings-capture stays — that's unrelated). KnowledgeBase carries a
+"do not reintroduce" note.
+
+**Diagnostics logging added (`diag.py`).** Goal: field crashes must be diagnosable.
+- Rotating `assistkey.log` (+.1/.2/.3, 1 MB, appended across runs) with timestamped,
+  levelled, thread-tagged lines (replaces the old truncating stdout redirect +
+  launch-time `_rotate_logs`).
+- Crash capture in EVERY thread: `sys.excepthook`, `threading.excepthook`,
+  asyncio `loop.set_exception_handler`, Tk `report_callback_exception`; stdout/stderr
+  redirected into the log (no console under pythonw).
+- `redact_config` logs a config snapshot with the token as set/none — token never written.
+- Key events now logged (connect/disconnect/reconnect/utterance-fail/mic/playback);
+  `wake.py`/`config.py` `print()`s replaced with `logging`.
+- Tray gains **Open log**; README has a Troubleshooting section for bug reports.
+
+**Also:** confirmed the earlier Save-lag fix (reconnect only on cred change + try-first).
+The app backbone is sound — measured 0.0% idle CPU, 5 MB RSS, single instance.
+
+**Verified:** 35 tests pass (suppression tests removed; +5 `test_diag.py`).

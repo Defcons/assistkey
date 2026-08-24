@@ -62,19 +62,21 @@ All are machine-verified where possible (29 unit tests, build+launch of the exe)
 
 ---
 
-## PENDING — QA round (2026-08-23): hotkey capture, tray click, follow-up
+## PENDING — QA round (2026-08-23/24)
 
-1. **Hotkey suppression** — with the app running and hotkey = a normal key (e.g. `K`): focus a text field in another app, hold the hotkey to talk → the field must NOT receive "KKKK". Other keys type normally. ⚠ The captured key is unusable elsewhere while running — if you need to type it, pick an F-key hotkey. For a combo (e.g. Ctrl+Space): Ctrl still works alone (Ctrl+C etc.), only the full combo is swallowed.
-2. **Tray click → Settings** — double-click the tray icon (single-click where the OS supports it) opens Settings; right-click still shows the menu.
-3. **Follow-up on a question** — with Follow-up ON, trigger a request the agent can't parse so it replies with a question ("What did you mean?"). The app should auto-listen for your answer (reply ends with "?"). Statements ("Turned on the lights.") should NOT re-listen.
+1. **No system lag** — with the app running, typing anywhere in Windows must feel completely normal. (The hotkey-capture keyboard hook that caused whole-PC lag has been removed entirely.)
+2. **Save is instant** — change a non-connection setting (e.g. Dismiss after) → Save → the app stays connected (tray stays grey) and works immediately; no multi-second stall. Changing the URL/token reconnects, but promptly.
+3. **Tray click → Settings** — double-click the tray icon (single-click where the OS supports it) opens Settings; right-click still shows the menu.
+4. **Follow-up on a question** — with Follow-up ON, trigger a request the agent can't parse so it replies with a question ("What did you mean?"). The app should auto-listen for your answer (reply ends with "?"), and the popup reads **"Follow-up — answer now"** (not "Listening"). Statements ("Turned on the lights.") should NOT re-listen.
 
 ---
 
-## PENDING — perf fixes + capture opt-in (2026-08-23, after system-lag report)
+## PENDING — diagnostics logging (2026-08-24)
 
-**Context:** the always-on hotkey-suppression hook was lagging the whole PC; capture is now OFF by default and the reconnect-on-save stall is fixed.
+**Goal:** field crashes/issues must be diagnosable from the log.
 
-1. **No system lag by default** — with the app running (Capture key OFF, the default), typing anywhere in Windows must feel completely normal (the global keyboard hook is no longer installed).
-2. **Save is instant** — change a non-connection setting (e.g. Dismiss after) → Save → the app stays connected (tray stays grey) and works immediately; no multi-second stall. Changing the URL/token still reconnects, but promptly.
-3. **Capture key toggle** (Settings → Voice → Capture key) — turning it ON installs the hook and captures the hotkey (hold it in a text field → nothing types). If typing feels laggy with it on, that's the known cost — turn it back off. Toggling it Save-to-Save should take effect without restarting.
-4. **Follow-up is labelled** — with Follow-up ON and a reply that's a question, the auto re-listen popup reads **"Follow-up — answer now"** (not "Listening"), so it's clear it opened the mic on its own.
+1. **Log has real content** — after a normal session, tray → **Open log** (or open `assistkey.log`): it shows timestamped lines — a "session start" banner, a redacted `config:` line, `connected to Home Assistant …`, etc. (Not empty like before.)
+2. **Token is never in the log** — search the log for your actual token string: it must NOT appear (the `config:` line shows `token=set`, not the value).
+3. **Crashes are captured** — cause an error (e.g. set a bad mic device, or wrong URL): the log records it with a traceback and level (ERROR/WARNING/CRITICAL), including errors from background threads (connection, wake).
+4. **Rotation** — over long/repeated use the log stays bounded (`assistkey.log` rolls to `.1/.2/.3` at ~1 MB); history survives restarts (appended, not truncated).
+5. **For a bug report** — "tray → Open log, send me assistkey.log (and .1 if present)" should give enough to diagnose.

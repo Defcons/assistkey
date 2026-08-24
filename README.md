@@ -150,10 +150,27 @@ build.bat
 | `config.py` | `config.json` load/save + credential resolution + hotkey serialization. |
 | `dpapi.py` | Encrypt/decrypt the HA token at rest (Windows DPAPI, per-user). |
 | `autostart.py` | Start-at-login toggle (per-user registry Run key). |
-| `tests/` | Automated tests (config, hotkey, overlay, client, dpapi, autostart). |
+| `diag.py` | Logging + crash capture (rotating log, all-thread exception hooks). |
+| `tests/` | Automated tests (config, hotkey, overlay, client, dpapi, autostart, diag). |
 
-Errors are written to `assistkey.log` next to the app (the silent launcher has
-no console).
+## Troubleshooting / logs
+
+Everything the app does is written to **`assistkey.log`** next to the app — a
+rotating file (plus `assistkey.log.1/.2/.3`) with timestamps, so it survives
+crashes and restarts (the silent launcher has no console). Open it any time from
+the tray icon → **Open log**.
+
+It captures startup, connection status, and — importantly — **uncaught errors
+from every part of the app** (the UI, the Home Assistant connection, the hotkey
+and wake-word listeners), each with a full traceback. Your access token is
+**never** written to it.
+
+**Reporting a bug:** reproduce the issue, then tray → **Open log** and attach
+`assistkey.log` (and `assistkey.log.1` if present) to the report.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ## License
 

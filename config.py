@@ -11,6 +11,7 @@ token is written here, config.json is sensitive and git-ignored.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +19,8 @@ from pathlib import Path
 from pynput import keyboard as kb
 
 import dpapi
+
+log = logging.getLogger("assistkey.config")
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
@@ -68,8 +71,6 @@ class Config:
     dismiss_seconds: float = 2.0           # seconds the popup lingers AFTER the reply is spoken
     popup_monitor: str = "primary"         # "primary" | "cursor" | monitor index ("0", "1", …)
     follow_up_enabled: bool = False        # auto-listen for a follow-up when HA asks a question
-    suppress_hotkey: bool = False          # capture the hotkey so it can't type in other apps
-                                           # (installs a global keyboard hook — can lag input; opt-in)
 
     @property
     def hotkey_set(self) -> frozenset[str]:
@@ -95,7 +96,7 @@ class Config:
                 obj.ha_token = dpapi.unprotect(obj.ha_token)  # decrypt at rest -> plaintext in memory
                 return obj
             except Exception as exc:  # noqa: BLE001 - corrupt config shouldn't crash startup
-                print(f"config.json unreadable ({exc}); using defaults")
+                log.warning("config.json unreadable (%s); using defaults", exc)
         return cls()
 
     def save(self) -> None:
@@ -113,7 +114,6 @@ class Config:
             "dismiss_seconds": self.dismiss_seconds,
             "popup_monitor": self.popup_monitor,
             "follow_up_enabled": self.follow_up_enabled,
-            "suppress_hotkey": self.suppress_hotkey,
         }
         # Atomic write: a truncating write interrupted mid-flight (this app
         # force-kills older instances at startup) would corrupt config.json and

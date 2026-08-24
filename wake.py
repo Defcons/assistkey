@@ -10,11 +10,14 @@ Off by default — the user opts in from Settings.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
 import numpy as np
 import sounddevice as sd
+
+log = logging.getLogger("assistkey.wake")
 
 SAMPLE_RATE = 16000
 FRAME = 1280  # 80 ms at 16 kHz — openWakeWord's expected chunk
@@ -67,8 +70,8 @@ class WakeListener:
             try:
                 self._ensure_model()
                 self._listen_once()
-            except Exception as exc:  # noqa: BLE001 - keep the thread alive, retry
-                print(f"wake listener error: {exc}")
+            except Exception:  # noqa: BLE001 - keep the thread alive, retry
+                log.exception("wake listener error")
                 time.sleep(1.5)
 
     def _ensure_model(self):

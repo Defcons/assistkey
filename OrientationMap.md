@@ -1,6 +1,6 @@
 # OrientationMap — AssistKey
 
-_Last verified: 2026-08-23 — feature pass: barge-in, follow-up, mic meter, tray connection colour, DPAPI token, autostart, rotating log, PyInstaller exe, CI._
+_Last verified: 2026-08-24 — removed laggy hotkey-capture hook; added diag.py logging (rotating log + all-thread crash capture)._
 
 ## What this is
 A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hotkey → talk → release; always-on-top toast shows Listening → your words → the streaming reply, which is also spoken. Python 3.12+ / tkinter + customtkinter, asyncio HA WebSocket, pynput hotkey, pystray tray. Entry: `app.py` (run via `AssistKey.vbs` silent or `run.bat` with a console).
@@ -13,11 +13,12 @@ A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hot
 
 ## Layout & conventions
 - Flat repo, ~6 modules at root; automated tests in `tests/`; screenshots in `docs/`.
-- Config + secrets in `config.json` (git-ignored — holds the HA token). Logs to `assistkey.log` (git-ignored).
+- Config + secrets in `config.json` (git-ignored — holds the HA token). Rotating log `assistkey.log` (+.1/.2/.3, git-ignored `assistkey.log*`) via `diag.py`.
 - Style: terse, purposeful docstrings; broad `except Exception  # noqa: BLE001` guards around anything cosmetic/best-effort so the UI/pump never wedges. Match it.
 
 ## Subsystem index
-- **App / wiring** — tray (icon reflects connected/active/disconnected + a Stop item), hotkey modes + barge-in, asyncio loop, single-instance, UI queue drain, rotating log. Entry: `app.py` (`App`, `HotkeyListener`, `kill_previous_instances`, `_rotate_logs`). Threads + cross-thread rules: see KnowledgeBase §Architecture.
+- **App / wiring** — tray (icon reflects connected/active/disconnected; menu Settings/Stop/Open log/Quit), hotkey modes + barge-in, asyncio loop, single-instance, UI queue drain. Entry: `app.py` (`App`, `HotkeyListener`, `kill_previous_instances`). Threads + cross-thread rules: see KnowledgeBase §Architecture.
+- **Diagnostics / logging** — rotating `assistkey.log` with timestamps + all-thread crash capture; token never logged. Entry: `diag.py` (`setup`, `log_config`, `redact_config`, `asyncio_exception_handler`). Details: KnowledgeBase §Architecture.
 - **Overlay + Settings** — the toast popup (Listening/Thinking/Response/Error state machine + slide/fade animation, mic-level meter, click-to-stop) and the settings dialog. Entry: `overlay.py` (`Overlay`, `SettingsDialog`, `_Dropdown`, `_Tooltip`). Animation internals + timing facts: KnowledgeBase §Popup overlay animation.
 - **Assist client** — persistent HA WebSocket, one utterance at a time: mic capture, pipeline events → UI callback, TTS playback, barge-in cancel, conversation continuity + follow-up. Entry: `assist_client.py` (`AssistClient`, `_ws_is_open`, `test_credentials`).
 - **Config** — `config.json` load/save (atomic; token DPAPI-encrypted at rest), credential resolution, hotkey serialization. Entry: `config.py` (`Config`, `key_to_canon`, `hotkey_label`).
