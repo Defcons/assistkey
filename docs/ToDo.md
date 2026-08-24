@@ -2,7 +2,7 @@
 
 _STRICT deferral ledger: the moment anything is set aside, it lands here. Done → checked off and pruned on the next touch. An entry that can't say why it's still open gets deleted. Never mirror Testing.md (pending human verdicts live there ALONE)._
 
-_Last updated: 2026-08-23_
+_Last updated: 2026-08-24_
 
 ---
 
@@ -10,6 +10,7 @@ _Last updated: 2026-08-23_
 
 - [ ] **Optional popup motion polish** — only if the smoothness fix isn't enough after the human visual check (see `Testing.md`): a slightly longer/eased or larger-travel slide. Deferred until the measured 60 fps fix is confirmed by eye.
 - [ ] **Follow-up field path is best-effort** — `continue_conversation` is read from two known spots in `intent-end`; if a future/older HA nests it elsewhere, follow-up silently won't trigger. Revisit against a live HA that asks a follow-up question (needs a pipeline/agent that sets it). Confirm the actual path, then pin it.
+- [ ] **Narrow residual race in `restart_utterance`** — if the user's key-release physically lands inside the (typically single-digit-ms) cancel-to-restart window, it can apply to the old, already-superseded `_release` event and be lost, leaving the new utterance recording until `MAX_RECORD` (120s) or another release. Deliberately not closed (see KnowledgeBase §Pipeline/audio + Journal 2026-08-24) — a realistic hold-to-talk gesture is never that fast, and existing safety nets bound the consequence. Revisit only if real-world reports suggest it's not as rare as assumed.
 
 ## Done
 
@@ -22,3 +23,4 @@ _Last updated: 2026-08-23_
 - [x] 2026-08-23 — Popup slide/reply-fade smoothness (timer resolution + time-based tweens + lightweight reveal).
 - [x] 2026-08-23 — Seed the project documentation set.
 - [x] 2026-08-24 — Pre-filled GitHub "Report an issue…" (tray action; user-reviewed draft, not auto-upload). See Journal 2026-08-24.
+- [x] 2026-08-24 — Barge-in always restarts Listening: hotkey/wake now call `restart_utterance()` instead of `start_utterance()`; fixed a real race where the cancelled utterance's stale `done` could clobber hotkey/wake state mid-restart. See Journal 2026-08-24.

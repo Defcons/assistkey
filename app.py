@@ -238,15 +238,16 @@ class App:
     # ---- hotkey -> asyncio --------------------------------------------------
 
     def _hotkey_down(self):
-        if self.client.is_active():
-            self.client.request_cancel()  # barge-in: a press during a reply stops it
-            return
         if self.config.wake_enabled:
             self.wake.pause()  # free the mic for the utterance
+        # restart_utterance cancels any in-flight reply first (even mid-TTS
+        # playback) so the Listening popup always takes over — one press always
+        # gets you talking, instead of the first press just stopping the old
+        # reply and requiring a second press to actually start listening.
         # notify_unavailable: a deliberate key-press deserves feedback if we're
         # not connected yet (a gentle "Reconnecting…" instead of a raw error).
         asyncio.run_coroutine_threadsafe(
-            self.client.start_utterance(notify_unavailable=True), self.loop)
+            self.client.restart_utterance(notify_unavailable=True), self.loop)
 
     def _hotkey_up(self):
         self.loop.call_soon_threadsafe(self.client.signal_release)
@@ -259,7 +260,10 @@ class App:
             winsound.Beep(760, 110)
         except Exception:  # noqa: BLE001
             pass
-        asyncio.run_coroutine_threadsafe(self.client.start_utterance(), self.loop)
+        # Same barge-in behaviour as the hotkey (see _hotkey_down): if a reply is
+        # still active when the wake word fires, cancel it and start listening
+        # right away instead of silently doing nothing.
+        asyncio.run_coroutine_threadsafe(self.client.restart_utterance(), self.loop)
 
     # ---- UI queue drain (main thread) --------------------------------------
 

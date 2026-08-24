@@ -99,3 +99,97 @@ def test_wants_follow_up_flag_and_question_heuristic():
     assert AC._wants_follow_up({}, "What did you mean?") is True          # trailing question
     assert AC._wants_follow_up({}, "Turned on the lights.") is False       # statement
     assert AC._wants_follow_up({}, "") is False
+
+
+def test_emit_done_suppressed_once_then_resumes(monkeypatch):
+    # request_cancel(suppress_done=True) must swallow exactly the NEXT _emit_done
+    # call (the cancelled utterance's own terminal signal), then behave normally
+    # again for whatever completes after it.
+    import assist_client as ac
+    monkeypatch.setattr(ac.sd, "stop", lambda: None)
+    emitted = []
+    client = AssistClient(cfg.Config(), ui=emitted.append)
+    client.loop = None
+    client.request_cancel(suppress_done=True)
+    client._emit_done()
+    assert emitted == []                 # suppressed
+    client._emit_done()
+    assert emitted == [("done",)]         # normal emission resumes after being consumed
+
+
+def test_plain_request_cancel_does_not_suppress_done(monkeypatch):
+    # Tray "Stop" / clicking the popup call request_cancel() with no args — that
+    # must NOT suppress the done signal; the popup should dismiss normally.
+    import assist_client as ac
+    monkeypatch.setattr(ac.sd, "stop", lambda: None)
+    emitted = []
+    client = AssistClient(cfg.Config(), ui=emitted.append)
+    client.loop = None
+    client.request_cancel()
+    client._emit_done()
+    assert emitted == [("done",)]
+
+
+def test_restart_utterance_starts_directly_when_idle():
+    # Nothing running -> restart_utterance behaves exactly like start_utterance.
+    calls = []
+    client = AssistClient(cfg.Config(), ui=lambda _c: None)
+
+    async def fake_start(notify_unavailable=False):
+        calls.append(("start", notify_unavailable))
+    client.start_utterance = fake_start
+
+    asyncio.run(client.restart_utterance(notify_unavailable=True))
+    assert calls == [("start", True)]
+
+
+def test_restart_utterance_cancels_with_suppress_and_waits_before_starting():
+    # Something IS running -> cancel (suppressing its done) and wait for the
+    # in-flight utterance to actually wind down before starting the new one.
+    order = []
+    client = AssistClient(cfg.Config(), ui=lambda _c: None)
+    client._active = True
+    client._idle.clear()
+
+    def fake_cancel(suppress_done=False):
+        order.append(("cancel", suppress_done))
+
+        async def _finish_shortly():
+            await asyncio.sleep(0)
+            client._idle.set()   # simulate the cancelled utterance winding down
+        asyncio.ensure_future(_finish_shortly())
+    client.request_cancel = fake_cancel
+
+    async def fake_start(notify_unavailable=False):
+        order.append(("start", notify_unavailable))
+    client.start_utterance = fake_start
+
+    asyncio.run(client.restart_utterance())
+    assert order == [("cancel", True), ("start", False)]
+
+
+def test_restart_utterance_gives_up_after_timeout_and_still_tries_to_start():
+    # Safety net: if the old utterance never winds down, don't hang forever.
+    order = []
+    client = AssistClient(cfg.Config(), ui=lambda _c: None)
+    client._active = True
+    client._idle.clear()   # deliberately never set
+
+    def fake_cancel(suppress_done=False):
+        order.append(("cancel", suppress_done))
+    client.request_cancel = fake_cancel
+
+    async def fake_start(notify_unavailable=False):
+        order.append(("start", notify_unavailable))
+    client.start_utterance = fake_start
+
+    async def fake_wait_for(coro, timeout):
+        coro.close()  # properly discard the awaited coroutine, not just drop it
+        raise asyncio.TimeoutError
+
+    async def run_with_faked_timeout():
+        import unittest.mock as mock
+        with mock.patch("asyncio.wait_for", fake_wait_for):
+            await client.restart_utterance()
+    asyncio.run(run_with_faked_timeout())
+    assert order == [("cancel", True), ("start", False)]

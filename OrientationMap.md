@@ -1,6 +1,6 @@
 # OrientationMap — AssistKey
 
-_Last verified: 2026-08-24 — removed laggy hotkey-capture hook; added diag.py logging + a redacted GitHub issue-report action._
+_Last verified: 2026-08-24 — removed laggy hotkey-capture hook; added diag.py logging + a redacted GitHub issue-report action; hotkey/wake now always barge-in via restart_utterance()._
 
 ## What this is
 A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hotkey → talk → release; always-on-top toast shows Listening → your words → the streaming reply, which is also spoken. Python 3.12+ / tkinter + customtkinter, asyncio HA WebSocket, pynput hotkey, pystray tray. Entry: `app.py` (run via `AssistKey.vbs` silent or `run.bat` with a console).
@@ -33,6 +33,7 @@ A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hot
 - **Cosmetic code must never wedge the pump or the transition state machine.** Animation/redraw/timer paths swallow exceptions and always complete the transition (`_animating` reset); the `_drain` loop always reschedules. Preserve this when editing.
 - **`config.json` holds the HA token (DPAPI-encrypted at rest)** — git-ignored; never commit it, never echo it into logs/docs. `config.save` writes it via `dpapi.protect` (per-user encryption) atomically (temp + `os.replace`); `config.load` decrypts to plaintext in memory. Legacy plaintext tokens still load and migrate on next save.
 - **`kill_previous_instances` branches on `sys.frozen`** — the venv build matches `python*.exe` under `…\.venv\`; the PyInstaller exe matches its own `AssistKey.exe` name. Editing single-instance logic must keep BOTH paths correct, or a distributed exe could target unrelated `python.exe` processes.
+- **Never call `AssistClient.start_utterance()` from a fresh trigger (hotkey/wake) — call `restart_utterance()`.** `is_active()` stays true for the WHOLE utterance including TTS playback, so a plain `start_utterance()` silently no-ops while a reply is still being spoken. `restart_utterance()` cancels-with-`suppress_done` first if needed, so the cancelled run's `("done",)` can't race the new run's `("listening",)` and clobber `HotkeyListener`/wake state mid-gesture. See KnowledgeBase §Pipeline/audio.
 - **Every `wake.pause()` must be balanced by a `wake.resume()`.** Wake is paused before each utterance (`app._hotkey_down`/`_on_wake`) and resumed ONLY when the app sees a terminal `("done",)`/`("error",)`. So `AssistClient.start_utterance` MUST emit one even when it declines (e.g. ws not yet connected) — a silent early-return leaves wake-word listening paused until restart. Preserve this if you add another utterance entry point or early-return.
 
 ## Deferred

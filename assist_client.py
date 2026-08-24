@@ -16,6 +16,10 @@ overlay updates. Commands emitted:
     ("error", message)
     ("done",)                       reply finished (audio played) -> fade out
     ("status", text)                connection status (tray/debug)
+
+`restart_utterance()` is the barge-in entry point: it cancels whatever's active
+(suppressing ITS ("done",) so it can't race the new run's ("listening",)) before
+starting fresh — see the class docstring on `request_cancel`.
 """
 
 from __future__ import annotations
@@ -128,8 +132,11 @@ class AssistClient:
         self._next_id = 1
         self._routes: dict[int, asyncio.Queue] = {}
         self._active = False
+        self._idle = asyncio.Event()
+        self._idle.set()                        # nothing running yet
         self._release = asyncio.Event()
         self._cancel = asyncio.Event()          # barge-in: abort the current run
+        self._suppress_next_done = False        # see restart_utterance
         self.pipelines: list[dict] = []
         self.preferred_pipeline: str | None = None
         self._conversation_id: str | None = None  # thread multi-turn context
@@ -244,8 +251,18 @@ class AssistClient:
     def is_active(self) -> bool:
         return self._active
 
-    def request_cancel(self):
-        """Barge-in: stop any TTS playback now and end the in-flight run. Any thread."""
+    def request_cancel(self, suppress_done: bool = False):
+        """Barge-in: stop any TTS playback now and end the in-flight run. Any thread.
+
+        suppress_done=True additionally skips the terminal ("done",) signal for
+        THIS cancelled run — used by `restart_utterance`, where a new utterance is
+        about to replace it immediately: letting the old run's ("done",) through
+        would race the new run's ("listening",) and could reset hotkey/wake state
+        mid-gesture (see KnowledgeBase). Plain callers (tray Stop, clicking the
+        popup) don't pass this — there the normal done/dismiss is exactly right.
+        """
+        if suppress_done:
+            self._suppress_next_done = True
         try:
             sd.stop()  # unblock _play's sd.wait() immediately
         except Exception:  # noqa: BLE001
@@ -253,6 +270,15 @@ class AssistClient:
         loop = self.loop
         if loop is not None:
             loop.call_soon_threadsafe(self._cancel.set)
+
+    def _emit_done(self):
+        """Fire the terminal ("done",) signal, unless it was suppressed for an
+        internal restart hand-off — consumed once, so the NEXT genuine completion
+        emits normally."""
+        if self._suppress_next_done:
+            self._suppress_next_done = False
+        else:
+            self.ui(("done",))
 
     def consume_follow_up(self) -> bool:
         """True once if the last reply asked to continue AND follow-up is enabled."""
@@ -283,6 +309,7 @@ class AssistClient:
                 self.ui(("done",))
             return
         self._active = True
+        self._idle.clear()
         self._release = asyncio.Event()
         self._cancel = asyncio.Event()
         self._follow_up_requested = False
@@ -293,6 +320,23 @@ class AssistClient:
             self.ui(("error", str(exc)))
         finally:
             self._active = False
+            self._idle.set()
+
+    async def restart_utterance(self, notify_unavailable: bool = False):
+        """Barge-in entry point: if a reply is currently active (including mid
+        TTS playback — `is_active()` stays true for the whole utterance), cancel
+        it WITHOUT letting its normal ("done",) fire, wait for it to actually wind
+        down, then start fresh. This is what makes pressing the hotkey always land
+        the user in Listening, instead of `start_utterance` silently no-op'ing
+        because `_active` is still true.
+        """
+        if self._active:
+            self.request_cancel(suppress_done=True)
+            try:
+                await asyncio.wait_for(self._idle.wait(), timeout=5)
+            except asyncio.TimeoutError:  # noqa: BLE001 - safety net; proceed anyway
+                log.warning("restart_utterance: previous utterance did not wind down in time")
+        await self.start_utterance(notify_unavailable=notify_unavailable)
 
     async def _run_utterance(self):
         audio_q: "queue.Queue[bytes]" = queue.Queue()
@@ -473,7 +517,7 @@ class AssistClient:
                 pass
             for task in (watcher, capper, completer, canceller):
                 task.cancel()
-            self.ui(("done",))  # ALWAYS fires -> popup always dismisses
+            self._emit_done()  # fires -> popup dismisses; suppressed once for a restart hand-off
 
     async def _play(self, tts_output: dict):
         url = tts_output["url"]

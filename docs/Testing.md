@@ -2,7 +2,7 @@
 
 _STRICT pending-manual-test queue. Each entry: repro steps + explicit pass criteria (runnable COLD, weeks later) + what's already machine-verified. Confirmed → graduate the durable result to KnowledgeBase/Journal and DELETE the entry._
 
-_Last updated: 2026-08-23_
+_Last updated: 2026-08-24_
 
 ---
 
@@ -51,7 +51,7 @@ _Last updated: 2026-08-23_
 All are machine-verified where possible (29 unit tests, build+launch of the exe); these need a human with a live Home Assistant.
 
 1. **Tray connection colour** — start with HA unreachable (wrong URL): tray icon is **red**. Fix the URL / connect: turns **grey**. Hold the hotkey: **green** while Listening/working, back to grey after. Drop HA (stop it): returns to red within a few seconds.
-2. **Barge-in / cancel** — while a reply is **speaking**, press the hotkey → speech stops immediately and the popup dismisses. Repeat with tray **Stop** and with **clicking the popup**. During **Thinking**, clicking the popup / tray Stop also aborts cleanly (no stuck popup).
+2. **Cancel via tray Stop / clicking the popup** — while a reply is **speaking**, use tray **Stop** or **click the popup** → speech stops immediately and the popup dismisses (no new listening — that's correct here, unlike a hotkey press; see the "Barge-in always restarts Listening" section below for the hotkey case). During **Thinking**, the same two actions also abort cleanly (no stuck popup).
 3. **Mic level meter** — hold the hotkey and speak: a bar under "Listening" rises/falls with your voice; silence → near-empty.
 4. **Follow-up** (Settings → Voice → Follow-up ON; needs an HA agent that asks a question) — after a reply that asks something, the app re-listens automatically (no key press), ends on your silence (HA VAD), and the answer continues the same conversation. With Follow-up OFF, it dismisses as before. If it never auto-listens, capture the `intent-end` payload to confirm where HA put `continue_conversation` (see ToDo).
 5. **Conversation continuity** — with Follow-up OFF, issue a command, then within ~60 s press again and give a context-dependent follow-up ("...and turn it off") — HA should keep context.
@@ -101,3 +101,34 @@ failed", exception type, file/line) survived. 49 tests pass.
 6. **Still worth a glance** — the template reminds you it's a public issue; the redaction is the main defence, but skim it before hitting Submit in case something slipped through a pattern we didn't anticipate.
 
 **Known caveat:** the target repo (`github.com/Defcons/assistkey`) doesn't exist publicly yet (see the earlier "is this ready to go public" conversation) — until it's pushed, the opened link 404s. The feature is code-complete and unit-tested; this check needs the repo to be live first.
+
+---
+
+## PENDING — Barge-in always restarts Listening (2026-08-24)
+
+**Goal:** pressing the hotkey while a response is showing — whether it's still being
+SPOKEN or just lingering on screen before dismissal — must always take you straight
+into a fresh Listening popup, in one press.
+
+**Already machine-verified:** an end-to-end harness driving the real `_run_utterance`
+control flow (fake audio/websocket I/O only) confirmed: barge-in mid-TTS-playback
+stops the audio, does NOT emit a stale `done` that could race the new session, and a
+genuinely new utterance starts (second `assistant`/`listening` pair). 54 unit tests
+pass. See Journal 2026-08-24 for the full trace and the race it fixed.
+
+**What needs a human, with real speech:**
+1. **Mid-speech barge-in** — ask something that gets a reply of a few seconds; while
+   it's being SPOKEN OUT LOUD, press the hotkey again. The reply should cut off
+   immediately and the Listening popup should appear right away (one press, not two).
+2. **Lingering-response barge-in** — let a reply finish speaking and sit on screen
+   during its `dismiss_seconds` countdown; press the hotkey. Listening should slide in
+   and take over cleanly (this path already worked before the fix — confirm it still does).
+3. **Hold-mode integrity** — in hold-mode, do (1) as a natural press-hold-speak-release
+   gesture (not a fast tap): after barging in, hold the key, say your new command, then
+   release normally. Confirm it ends on release (goes to Thinking) rather than
+   recording until it times out — this is the specific race the fix targets.
+4. **Toggle-mode** — same scenarios in tap-to-toggle mode.
+5. **Wake word** (if enabled) — say the wake word while a reply is playing; confirm it
+   also barges in and starts listening (this was extended for consistency alongside
+   the hotkey fix — flag if you'd rather wake word behave differently, e.g. never
+   interrupt an in-progress reply).

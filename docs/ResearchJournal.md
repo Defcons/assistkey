@@ -218,3 +218,69 @@ human glance stays the backstop, not the primary defence anymore.
 Net effect vs the two earlier iterations today: the draft is now informative (a real
 maintainer has something to go on) AND doesn't require the user to manually redact
 anything — the previous two versions each gave up one of those.
+
+---
+
+## 2026-08-24 — Barge-in: Listening must always override a shown response
+
+User: "if we get a response from Jarvis/Assistant and we click the hotkey to talk
+again, the new 'Listening' popup should always override the answer from the first
+ask." Traced the actual current behaviour rather than assuming it already worked.
+
+**Root cause.** `AssistClient.is_active()` stays true for the WHOLE utterance,
+including while the reply is being SPOKEN (TTS `sd.wait()` inside `_play`, awaited
+from `_run_utterance`'s main loop) — not just STT/thinking. `app._hotkey_down` special-
+cased "already active" to call `request_cancel()` and RETURN, never calling
+`start_utterance` again. So: press hotkey while a reply is playing -> it stops the
+reply -> and does NOTHING ELSE. In hold-mode this is worse than it sounds: the user
+is physically holding the key expecting to talk, but no new utterance ever starts —
+they have to release and press again.
+
+**Fix: `AssistClient.restart_utterance()`.** Cancels whatever's active (if anything),
+waits for it to actually wind down (`self._idle`, an `asyncio.Event` mirroring
+`_active`), then starts fresh. `app._hotkey_down` (and, for consistency, `_on_wake` —
+flagged to the user as an extra, same-root-cause fix beyond what was literally asked)
+now call this instead of `start_utterance` directly.
+
+**A real race surfaced along the way, not just the headline behaviour.** The
+cancelled utterance's own `("done",)` is queued (in `_run_utterance`'s finally)
+BEFORE `_active`/`_idle` flip — so by the time `restart_utterance`'s wait unblocks,
+that stale `("done",)` is already ahead of the new utterance's `("listening",)` in
+`ui_queue`. `_handle`'s "done" branch calls `hotkey.mark_idle()` (`_talking=False`);
+if that fires while the user is STILL HOLDING the key down for their new command,
+the eventual release's `_talking` check silently fails and `signal_release()` never
+reaches the new utterance — it would just keep recording until `MAX_RECORD` (120s).
+Fixed at the source: `request_cancel(suppress_done=True)` + a new `_emit_done()`
+helper that consumes a one-shot `_suppress_next_done` flag, so the cancelled run's
+terminal signal never reaches `_handle` at all when it's about to be immediately
+superseded. Plain `request_cancel()` (tray Stop, popup click) is unaffected — those
+callers WANT the normal done/dismiss.
+
+**Verified two ways:**
+1. Unit tests (`tests/test_assist_client.py`): `_emit_done` suppression is exactly
+   one-shot and doesn't affect plain `request_cancel()`; `restart_utterance` branches
+   correctly for idle/active/timeout (a `wait_for` mock that properly `.close()`s the
+   un-awaited coroutine, to keep the suite warning-free).
+2. **A real end-to-end harness** (not committed — a one-off `probe_barge_in.py`,
+   pattern matches this session's other verification scripts) that drives the ACTUAL
+   `_run_utterance` control flow with only the I/O boundaries faked (audio primitives,
+   TTS fetch/decode, the websocket object) — confirmed a genuine `PortAudioError`-free
+   run: a real reply streams and starts being "spoken" (mid-playback, `is_active()`
+   true), a simulated hotkey press mid-speech triggers `restart_utterance`, and the
+   full event sequence came out exactly as intended: `[..., 'response_final',
+   'assistant', 'listening', 'done']` — a SECOND `listening` fires (the override),
+   TTS is confirmed stopped, and exactly ONE `done` appears total (the new
+   utterance's, not the cancelled one's). Two harness bugs surfaced and were fixed
+   along the way (a fake `ws` missing `.state.name=="OPEN"`, and forgetting to set
+   `client.loop` — both caught by the SAME `_ws_is_open`/`if loop is not None` guards
+   this codebase already has, which is itself a small vote of confidence in those
+   guards).
+
+**Accepted residual edge case (documented in KnowledgeBase, not fixed):** if the
+user's key-*release* physically lands inside the brief cancel-to-restart window
+(typically single-digit ms), that release can apply to the OLD, already-superseded
+`_release` event and be lost — the new utterance keeps recording until `MAX_RECORD`
+or another release. Not closed: a realistic hold-to-talk press-then-release gesture
+is never that fast, and existing safety nets bound the consequence.
+
+**Verified:** 54 tests pass (+4). Full regression clean.
