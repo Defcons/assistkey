@@ -21,6 +21,7 @@ import queue
 import subprocess
 import sys
 import threading
+import webbrowser
 from pathlib import Path
 
 import tkinter as tk
@@ -195,6 +196,7 @@ class App:
                                  default=True),  # clicking the tray icon opens Settings
                 pystray.MenuItem("Stop", lambda: self.ui_queue.put(("cancel",))),
                 pystray.MenuItem("Open log", lambda: self.ui_queue.put(("open_log",))),
+                pystray.MenuItem("Report an issue…", lambda: self.ui_queue.put(("report_issue",))),
                 pystray.MenuItem("Quit", lambda: self.ui_queue.put(("quit",))),
             ),
         )
@@ -335,6 +337,14 @@ class App:
                 os.startfile(diag.LOG_PATH)  # noqa: S606 - open the log in the default viewer
             except Exception:  # noqa: BLE001
                 log.exception("could not open log file")
+        elif name == "report_issue":
+            # Opens a PRE-FILLED GitHub issue draft in the user's browser for them to
+            # review and submit themselves — nothing is sent automatically/silently.
+            try:
+                webbrowser.open(diag.build_issue_url(self.config))
+                log.info("opened issue-report draft")
+            except Exception:  # noqa: BLE001
+                log.exception("could not open issue-report draft")
         elif name == "quit":
             self._quit()
 

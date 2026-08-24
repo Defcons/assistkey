@@ -80,3 +80,17 @@ All are machine-verified where possible (29 unit tests, build+launch of the exe)
 3. **Crashes are captured** — cause an error (e.g. set a bad mic device, or wrong URL): the log records it with a traceback and level (ERROR/WARNING/CRITICAL), including errors from background threads (connection, wake).
 4. **Rotation** — over long/repeated use the log stays bounded (`assistkey.log` rolls to `.1/.2/.3` at ~1 MB); history survives restarts (appended, not truncated).
 5. **For a bug report** — "tray → Open log, send me assistkey.log (and .1 if present)" should give enough to diagnose.
+
+---
+
+## PENDING — "Report an issue…" (2026-08-24)
+
+**Goal:** a one-click, privacy-reviewed path from a crash to a GitHub issue — no auto-upload.
+
+1. **Opens a real draft** — tray → **Report an issue…** opens your browser to a GitHub "new issue" page (once the repo is public — see caveat below) with the title/body/labels pre-filled. Nothing is sent until YOU click GitHub's Submit button.
+2. **Picks up a real error** — cause an error (e.g. bad mic device), then Report an issue…: the log excerpt in the draft should be that error's traceback, not older noise.
+3. **No error yet** — on a fresh run with no errors logged, the draft should still open with a "(no errors logged — describe the issue above)" placeholder instead of failing.
+4. **Privacy check** — confirm your actual HA hostname does NOT appear in the "Config:" line (only the scheme, e.g. `url=https://(redacted)`), and confirm the loud "this is a PUBLIC issue" warning is visible above the log excerpt. Skim the excerpt itself for anything you'd want to redact before submitting (this is expected human review, not a bug).
+5. **Token check** — your real access token must not appear anywhere in the opened page.
+
+**Known caveat:** the target repo (`github.com/Defcons/assistkey`) doesn't exist publicly yet (see the earlier "is this ready to go public" conversation) — until it's pushed, the opened link 404s. The feature is code-complete and unit-tested; this check needs the repo to be live first.

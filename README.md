@@ -165,8 +165,13 @@ from every part of the app** (the UI, the Home Assistant connection, the hotkey
 and wake-word listeners), each with a full traceback. Your access token is
 **never** written to it.
 
-**Reporting a bug:** reproduce the issue, then tray → **Open log** and attach
-`assistkey.log` (and `assistkey.log.1` if present) to the report.
+**Reporting a bug — the easy way:** tray → **Report an issue…** opens a GitHub
+issue pre-filled with the most recent error from your log, plus your OS/Python
+version. Nothing is sent automatically — it opens in your browser for you to
+review (it's a **public** issue, so double-check for anything personal) and
+submit yourself, from your own GitHub account. You can also do it manually:
+tray → **Open log** and attach `assistkey.log` (and `.log.1` if present) to a
+report at [github.com/Defcons/assistkey/issues](https://github.com/Defcons/assistkey/issues).
 
 ## License
 

@@ -21,3 +21,4 @@ _Last updated: 2026-08-23_
 - [x] 2026-08-23 — Hardening pass (wake pause/resume, atomic save, pump guard, docstring, get_running_loop).
 - [x] 2026-08-23 — Popup slide/reply-fade smoothness (timer resolution + time-based tweens + lightweight reveal).
 - [x] 2026-08-23 — Seed the project documentation set.
+- [x] 2026-08-24 — Pre-filled GitHub "Report an issue…" (tray action; user-reviewed draft, not auto-upload). See Journal 2026-08-24.

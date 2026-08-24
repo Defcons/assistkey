@@ -113,3 +113,44 @@ suspend/resume for settings-capture stays — that's unrelated). KnowledgeBase c
 The app backbone is sound — measured 0.0% idle CPU, 5 MB RSS, single instance.
 
 **Verified:** 35 tests pass (suppression tests removed; +5 `test_diag.py`).
+
+---
+
+## 2026-08-24 — Pre-filled GitHub issue reporting (not auto-upload)
+
+User asked for "auto-send error logs to our public repo." Flagged two real problems
+before building the literal version: (1) this app's logs can contain the real HA URL,
+device names, and error text — auto-uploading that to a PUBLIC repo with no human in
+the loop is a genuine privacy exposure for every future user, not just David; (2)
+there's no safe way to make it *fully* automatic from a distributed client — creating
+GitHub issues needs an API token, and any token embedded in a public exe is
+extractable/abusable. Presented three tiers (prefilled-draft-for-review / automatic-
+via-a-hosted-backend / manual-only); user picked **prefilled draft**.
+
+**Implementation (`diag.py` + `app.py`):**
+- `find_error_excerpt(paths)` — scans `assistkey.log` then `.log.1` newest-first for
+  the most recent ERROR/CRITICAL record (a record's traceback lines carry no
+  timestamp, so a block runs until the next timestamped line); falls back to a plain
+  tail if nothing rose above WARNING. Capped at 1500 chars with a truncation notice.
+- `build_issue_url(config)` — fills a GitHub `issues/new?title=&body=&labels=bug` URL:
+  a repro template, a bolded "this is a PUBLIC issue, review before submitting"
+  warning ABOVE the excerpt, the excerpt itself, and a system/config summary.
+- **`redact_config_public`** (new, stricter than the existing `redact_config` used for
+  the local log) masks the HA URL down to just its scheme — the one field fully under
+  our control, so there's no reason to expose the hostname by default even though the
+  template also tells the user to check. The excerpt itself can't be safely
+  auto-redacted (might mangle the trace), hence the visible warning instead.
+- Tray **"Report an issue…"** → `webbrowser.open(diag.build_issue_url(self.config))`.
+  No GitHub token anywhere in the client — the user's own GitHub login creates the
+  issue when they click Submit.
+
+**Verified:** 43 tests pass (+8: excerpt selection prefers the latest error over older
+WARNING noise, traceback-block boundaries, previous-log fallback, truncation, no
+token/no hostname in the output, real-error content reaches the body). Manually built
+a realistic log + real Config and inspected the decoded URL body end-to-end — correct
+template, warning, excerpt, and masked config line; URL length 1414 chars (well within
+practical limits).
+
+**Not yet checkable:** the target repo doesn't exist publicly yet, so the opened link
+currently 404s — logged in Testing.md, this resolves whenever the repo is published
+(see the earlier "public repo readiness" work).
