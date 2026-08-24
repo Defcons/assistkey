@@ -83,15 +83,21 @@ All are machine-verified where possible (29 unit tests, build+launch of the exe)
 
 ---
 
-## PENDING — "Report an issue…" (2026-08-24, tightened to fully anonymous same day)
+## PENDING — "Report an issue…" (2026-08-24, settled: auto-pulled error, auto-redacted)
 
-**Goal:** a one-click path to a GitHub issue draft — no auto-upload, and (per explicit
-instruction) NO auto-included log/config/URL data of any kind; the draft is anonymous
-until the user chooses to add something themselves.
+**Goal:** a one-click path to a GitHub issue draft with the actual recent error attached
+for context — no auto-upload, and no privacy-sensitive substrings in that error text.
+
+**Already machine-verified:** built the draft against your REAL config (actual HA URL,
+actual token) and a realistic crash log — confirmed the real HA host, username, and a
+sample IP were absent from the generated URL/body, while the real error text ("mic open
+failed", exception type, file/line) survived. 49 tests pass.
 
 1. **Opens a real draft** — tray → **Report an issue…** opens your browser to a GitHub "new issue" page (once the repo is public — see caveat below) with the title/body/labels pre-filled. Nothing is sent until YOU click GitHub's Submit button.
-2. **Genuinely anonymous** — the opened draft contains only the blank repro template and generic software info (Python version, OS build, source-vs-exe). Confirm it does NOT contain your HA URL, any config values, or any log content — there should be nothing to redact, because nothing user-specific was ever filled in.
-3. **Token check** — your real access token must not appear anywhere in the opened page (true by construction now — the function touches neither config nor the log file — but worth an eyeball).
-4. **Attaching the log is manual** — if you drag `assistkey.log` into the issue box yourself, confirm that's the only way log content reaches the draft.
+2. **Picks up a real error** — cause an error (e.g. bad mic device), then Report an issue…: the excerpt should be that error's traceback, not older noise.
+3. **Redaction holds on a REAL error** — if the error text happens to include your actual HA URL, your Windows username in a file path, or a local IP, confirm each is replaced with a bracketed placeholder (`[home-assistant-url]`, `[user]`, `[ip]`, `[url]`, `[token]`) rather than shown verbatim — while the actual error message/exception type stays readable.
+4. **No error yet** — on a fresh run with nothing logged, the draft opens with a "no errors logged — describe the issue above" placeholder instead of failing.
+5. **Token check** — your real access token must not appear anywhere in the opened page.
+6. **Still worth a glance** — the template reminds you it's a public issue; the redaction is the main defence, but skim it before hitting Submit in case something slipped through a pattern we didn't anticipate.
 
 **Known caveat:** the target repo (`github.com/Defcons/assistkey`) doesn't exist publicly yet (see the earlier "is this ready to go public" conversation) — until it's pushed, the opened link 404s. The feature is code-complete and unit-tested; this check needs the repo to be live first.

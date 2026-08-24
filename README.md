@@ -165,13 +165,14 @@ from every part of the app** (the UI, the Home Assistant connection, the hotkey
 and wake-word listeners), each with a full traceback. Your access token is
 **never** written to it.
 
-**Reporting a bug — the easy way:** tray → **Report an issue…** opens a blank,
-pre-formatted GitHub issue in your browser — a repro template plus your
-OS/Python version, nothing else. It's entirely anonymous: no log content, no
-config, no URLs are ever auto-filled. Nothing is sent automatically, either —
-you write it up and submit it yourself, from your own GitHub account. If you
-want to include your log, tray → **Open log** and drag `assistkey.log` (and
-`.log.1` if present) into the issue yourself.
+**Reporting a bug — the easy way:** tray → **Report an issue…** opens a GitHub
+issue in your browser, pre-filled with the most recent error from your log and
+your OS/Python version. The error text is automatically scrubbed first — your
+Home Assistant address, file paths, IP addresses, and anything token-shaped are
+replaced with generic placeholders before they ever reach the draft. Nothing is
+sent automatically, either — it's a public issue, so give it a quick look, then
+submit it yourself from your own GitHub account. Want to include the full log?
+Tray → **Open log** and drag `assistkey.log` in yourself.
 
 ## License
 

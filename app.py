@@ -341,7 +341,7 @@ class App:
             # Opens a PRE-FILLED GitHub issue draft in the user's browser for them to
             # review and submit themselves — nothing is sent automatically/silently.
             try:
-                webbrowser.open(diag.build_issue_url())
+                webbrowser.open(diag.build_issue_url(self.config))
                 log.info("opened issue-report draft")
             except Exception:  # noqa: BLE001
                 log.exception("could not open issue-report draft")

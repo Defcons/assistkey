@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import platform
+import re
 import sys
 import threading
 import urllib.parse
@@ -24,11 +25,26 @@ LOG_PATH = Path(__file__).with_name("assistkey.log")
 log = logging.getLogger("assistkey")
 
 REPO_URL = "https://github.com/Defcons/assistkey"
+MAX_EXCERPT_CHARS = 1500      # keeps the prefilled issue URL a sane length
+TAIL_CHARS = 4000             # fallback excerpt when nothing rose to ERROR/CRITICAL
 
-# Deliberately generic: nothing here is specific to one user or one machine — no
-# log content, no config values, no URL, no file paths. Just software-version
-# facts (same for every install) so the draft stays genuinely anonymous. The user
-# attaches their own log file by hand if and when they choose to.
+_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ")
+_ERR_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (ERROR|CRITICAL)\s")
+
+# Patterns of things that can end up inside an exception message/traceback and
+# would identify the reporter or their network if posted verbatim to a PUBLIC
+# issue: any URL, a JWT-shaped string (HA long-lived tokens look like this —
+# defence in depth, since nothing currently logs the token), a Windows user
+# profile path, and IPv4 addresses.
+_URL_RE = re.compile(r"https?://\S+")
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
+_WIN_USER_RE = re.compile(r"(C:\\Users\\)[^\\\s]+")
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+# Deliberately minimal beyond the excerpt: no config dump, no raw file paths, no
+# raw log line count. Everything reaching the excerpt slot has already gone
+# through `_redact` — but a human glance is still the last line of defence, since
+# no regex catches everything a future log line might contain.
 _ISSUE_TEMPLATE = """### What were you doing?
 <!-- e.g. "Pressed the hotkey and started talking" -->
 
@@ -36,9 +52,14 @@ _ISSUE_TEMPLATE = """### What were you doing?
 ### What did you expect to happen, and what happened instead?
 
 
-### Log (optional)
-If it helps, attach your **assistkey.log** by dragging it into this box —
-tray icon → **Open log** finds the file. Nothing is attached automatically.
+### Log excerpt (most recent error, auto-redacted)
+Personal-looking data (your Home Assistant address, file paths, IP addresses)
+has been stripped below automatically — but this is still a PUBLIC issue, so
+please give it a quick look before you submit. Attach the full **assistkey.log**
+yourself (tray → Open log) if you want to share more.
+```
+{excerpt}
+```
 
 ### System
 - AssistKey: {mode}
@@ -104,12 +125,87 @@ def log_config(config) -> None:
     log.info("config: %s", redact_config(config))
 
 
-def build_issue_url(repo_url: str = REPO_URL) -> str:
-    """A GitHub 'new issue' URL prefilled with a blank repro template and generic
-    software-version info only — no log content, no config, no URL, nothing that
-    could identify the reporter or their setup. For the user to fill in and submit
-    themselves (their GitHub login creates it; nothing is sent automatically)."""
+def _redact(text: str, config=None) -> str:
+    """Strip privacy-sensitive substrings from log text before it goes into a
+    PUBLIC issue draft. Two passes: an exact replace of the user's OWN configured
+    Home Assistant URL/host (most precise — labels it clearly), then generic
+    patterns for anything else that slipped in (a different URL, a token-shaped
+    string, a Windows user path, an IPv4 address). Errs toward over-redacting —
+    losing a little context is fine, leaking an address or a path isn't.
+    """
+    if config is not None:
+        try:
+            url, _ = config.credentials()
+        except Exception:  # noqa: BLE001
+            url = ""
+        if url:
+            text = text.replace(url, "[home-assistant-url]")
+            host = urllib.parse.urlsplit(url).netloc
+            if host:
+                text = text.replace(host, "[home-assistant-host]")
+    text = _JWT_RE.sub("[token]", text)
+    text = _URL_RE.sub("[url]", text)
+    text = _WIN_USER_RE.sub(r"\1[user]", text)
+    text = _IPV4_RE.sub("[ip]", text)
+    return text
+
+
+def _clip(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return "… (truncated — attach assistkey.log for the full trace)\n" + text[-max_chars:]
+
+
+def _tail(path: Path, chars: int = TAIL_CHARS) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return text[-chars:] if len(text) > chars else text
+
+
+def find_error_excerpt(paths, max_chars: int = MAX_EXCERPT_CHARS) -> str:
+    """The most recent ERROR/CRITICAL log record (+ any traceback under it) found
+    across `paths`, checked newest-file-first. A record's traceback lines have no
+    timestamp, so a block runs until the next timestamped line or EOF.
+
+    Falls back to the tail of the first non-empty log if nothing reached
+    ERROR/CRITICAL — routine WARNING noise (a reconnect retry, say) is skipped in
+    favour of a real crash whenever one exists. Returned text is NOT yet redacted
+    — callers must pass it through `_redact` before it leaves the machine.
+    """
+    for path in paths:
+        try:
+            if not path.exists() or path.stat().st_size == 0:
+                continue
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        start = next((i for i in range(len(lines) - 1, -1, -1) if _ERR_RE.match(lines[i])), None)
+        if start is None:
+            continue
+        end = start + 1
+        while end < len(lines) and not _TS_RE.match(lines[end]):
+            end += 1
+        return _clip("\n".join(lines[start:end]), max_chars)
+    for path in paths:
+        if path.exists() and path.stat().st_size > 0:
+            return _clip(_tail(path), max_chars)
+    return ""
+
+
+def build_issue_url(config=None, log_dir: Path | None = None, repo_url: str = REPO_URL) -> str:
+    """A GitHub 'new issue' URL prefilled with a title and the most recent error
+    from the log, run through `_redact` so the excerpt carries no HA URL/host, no
+    other URL, no token-shaped string, no Windows user path, and no IP address.
+    For the user to review and submit themselves (their GitHub login creates it;
+    nothing is sent automatically)."""
+    log_dir = log_dir or LOG_PATH.parent
+    candidates = [log_dir / "assistkey.log", log_dir / "assistkey.log.1"]
+    raw = find_error_excerpt(candidates)
+    excerpt = _redact(raw, config) if raw else "(no errors logged — describe the issue above)"
     body = _ISSUE_TEMPLATE.format(
+        excerpt=excerpt,
         mode="packaged .exe" if getattr(sys, "frozen", False) else "source (python)",
         python_version=platform.python_version(),
         os_version=platform.platform(),

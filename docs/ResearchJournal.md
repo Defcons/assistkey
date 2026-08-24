@@ -180,3 +180,41 @@ inspected the decoded body — confirmed empty of anything user- or machine-spec
 The local `assistkey.log` itself is UNCHANGED (still records connect/disconnect/
 errors/redacted config for your own troubleshooting via Open log) — only the
 *public-issue* path lost its auto-fill.
+
+---
+
+## 2026-08-24 — "Report an issue…" settles: auto-pull the error, redact it
+
+Third iteration of the same-day feature. User: "I want 'Auto-pulled most recent
+error + traceback' but in that log we should rather exclude privacy data." So: bring
+back `find_error_excerpt` (un-deleted from the fully-anonymous version), but pipe its
+output through a new `_redact(text, config)` before it reaches the URL, instead of
+either (a) relying on a human to catch it, or (b) refusing to include the excerpt at all.
+
+**`_redact` — two passes:**
+1. Exact replace of the user's OWN configured HA URL and host (from `config.credentials()`)
+   → labelled `[home-assistant-url]` / `[home-assistant-host]`. Most precise pass, since
+   we know the exact string.
+2. Generic regexes for anything else that might slip in: any other `https?://` URL →
+   `[url]`; a JWT-shaped string → `[token]` (defence in depth — nothing currently logs
+   the token, but a future log line shouldn't be able to leak one); a `C:\Users\<name>\`
+   segment → `C:\Users\[user]\` (keeps the rest of the path — still useful for "which
+   file/line" without the identifying username); IPv4 addresses → `[ip]`.
+
+Errs toward over-redacting (losing a little context is fine; leaking an address or path
+isn't). The issue template keeps a short "still public, give it a glance" line — the
+regex set can't be proven exhaustive against log lines nobody's written yet, so the
+human glance stays the backstop, not the primary defence anymore.
+
+**Verified:**
+- 49 tests pass (+10 vs the anonymous version: `_redact` per-pattern unit tests,
+  `find_error_excerpt` restored, an end-to-end test with a realistic log asserting the
+  URL/username/IP are gone while the real error text survives).
+- Ran it against this machine's REAL config (actual HA URL, actual token) and a
+  realistic crash log: real host absent from the URL, real token absent, "David" absent
+  from the body, a sample IP absent — while "connect failed" / exception type / file+line
+  all came through intact. Inspected the decoded body directly.
+
+Net effect vs the two earlier iterations today: the draft is now informative (a real
+maintainer has something to go on) AND doesn't require the user to manually redact
+anything — the previous two versions each gave up one of those.
