@@ -154,3 +154,29 @@ practical limits).
 **Not yet checkable:** the target repo doesn't exist publicly yet, so the opened link
 currently 404s — logged in Testing.md, this resolves whenever the repo is published
 (see the earlier "public repo readiness" work).
+
+---
+
+## 2026-08-24 — "Report an issue…" tightened to fully anonymous
+
+Follow-up to the same-day pre-filled-issue work. User: "just remove auto filling of
+all the privacy stuff, keep it anonymous" — a stronger stance than the masked-URL/
+excerpt-with-warning version just shipped. Rather than layer on more redaction,
+removed the auto-fill entirely: `diag.build_issue_url()` now takes NO arguments and
+touches no file — no log excerpt, no config summary, no URL (masked or otherwise).
+Deleted `find_error_excerpt`, `_tail`, `_clip`, `redact_config_public`, `_mask_url`,
+and their constants/regexes — all now-dead code the earlier version needed and this
+one doesn't. The draft body is a static repro template plus generic, non-identifying
+software-version facts (Python version, OS build, source-vs-exe) — the same for every
+install, nothing that traces back to a person or a network. The user still attaches
+`assistkey.log` themselves (tray → Open log) if and when they choose to.
+
+**Verified:** URL length dropped from 1414 to 601 chars. `pytest tests/` 39 pass (11
+excerpt/masking tests removed, 4 new ones assert the function takes only `repo_url`,
+the body contains no config-shaped keys/URL scheme/log-excerpt marker, and a
+token-shaped env var still can't reach the output). Manually built the real URL and
+inspected the decoded body — confirmed empty of anything user- or machine-specific.
+
+The local `assistkey.log` itself is UNCHANGED (still records connect/disconnect/
+errors/redacted config for your own troubleshooting via Open log) — only the
+*public-issue* path lost its auto-fill.

@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import platform
-import re
 import sys
 import threading
 import urllib.parse
@@ -25,12 +24,11 @@ LOG_PATH = Path(__file__).with_name("assistkey.log")
 log = logging.getLogger("assistkey")
 
 REPO_URL = "https://github.com/Defcons/assistkey"
-MAX_EXCERPT_CHARS = 1500      # keeps the prefilled issue URL a sane length
-TAIL_CHARS = 4000             # fallback excerpt when nothing rose to ERROR/CRITICAL
 
-_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ")
-_ERR_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (ERROR|CRITICAL)\s")
-
+# Deliberately generic: nothing here is specific to one user or one machine — no
+# log content, no config values, no URL, no file paths. Just software-version
+# facts (same for every install) so the draft stays genuinely anonymous. The user
+# attaches their own log file by hand if and when they choose to.
 _ISSUE_TEMPLATE = """### What were you doing?
 <!-- e.g. "Pressed the hotkey and started talking" -->
 
@@ -38,22 +36,14 @@ _ISSUE_TEMPLATE = """### What were you doing?
 ### What did you expect to happen, and what happened instead?
 
 
-### ⚠️ Before you submit — this is a PUBLIC issue
-Please skim the log excerpt below and remove anything personal — your Home
-Assistant URL, device names, or file paths with your Windows username. For the
-full picture, you can drag your **assistkey.log** file into this box to attach
-it (your access token is never written to the log, but it's worth a second look).
-
-### Log excerpt (most recent, newest first)
-```
-{excerpt}
-```
+### Log (optional)
+If it helps, attach your **assistkey.log** by dragging it into this box —
+tray icon → **Open log** finds the file. Nothing is attached automatically.
 
 ### System
 - AssistKey: {mode}
 - Python: {python_version}
 - OS: {os_version}
-- Config: {config_line}
 """
 
 _FORMAT = "%(asctime)s %(levelname)-7s [%(threadName)s] %(name)s: %(message)s"
@@ -114,84 +104,15 @@ def log_config(config) -> None:
     log.info("config: %s", redact_config(config))
 
 
-def _mask_url(url: str) -> str:
-    if not url:
-        return "(none)"
-    scheme = urllib.parse.urlsplit(url).scheme
-    return f"{scheme}://(redacted)" if scheme else "(set)"
-
-
-def redact_config_public(config) -> str:
-    """Like `redact_config`, but for content headed to a PUBLIC GitHub issue: the
-    Home Assistant hostname is masked too (only the scheme survives), not just the
-    token — that field is fully under our control, so there's no reason to expose
-    it by default even though the issue template also asks the user to check."""
-    try:
-        url, token = config.credentials()
-    except Exception:  # noqa: BLE001
-        url, token = "", ""
-    return (f"url={_mask_url(url)} token={'set' if token else '(none)'} "
-            f"hotkey={list(config.hotkey)} mode={config.trigger_mode} "
-            f"wake={config.wake_enabled}/{config.wake_word} follow_up={config.follow_up_enabled} "
-            f"mic={config.mic_device} spk={config.speaker_device} monitor={config.popup_monitor}")
-
-
-def _clip(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return "… (truncated — attach assistkey.log for the full trace)\n" + text[-max_chars:]
-
-
-def _tail(path: Path, chars: int = TAIL_CHARS) -> str:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    return text[-chars:] if len(text) > chars else text
-
-
-def find_error_excerpt(paths, max_chars: int = MAX_EXCERPT_CHARS) -> str:
-    """The most recent ERROR/CRITICAL log record (+ any traceback under it) found
-    across `paths`, checked newest-file-first. A record's traceback lines have no
-    timestamp, so a block runs until the next timestamped line or EOF.
-
-    Falls back to the tail of the first non-empty log if nothing reached
-    ERROR/CRITICAL — routine WARNING noise (a reconnect retry, say) is skipped in
-    favour of a real crash whenever one exists.
-    """
-    for path in paths:
-        try:
-            if not path.exists() or path.stat().st_size == 0:
-                continue
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            continue
-        start = next((i for i in range(len(lines) - 1, -1, -1) if _ERR_RE.match(lines[i])), None)
-        if start is None:
-            continue
-        end = start + 1
-        while end < len(lines) and not _TS_RE.match(lines[end]):
-            end += 1
-        return _clip("\n".join(lines[start:end]), max_chars)
-    for path in paths:
-        if path.exists() and path.stat().st_size > 0:
-            return _clip(_tail(path), max_chars)
-    return ""
-
-
-def build_issue_url(config=None, log_dir: Path | None = None, repo_url: str = REPO_URL) -> str:
-    """A GitHub 'new issue' URL prefilled with a title, a recent-error excerpt, and
-    a redacted config/system summary — for the user to review and submit themselves
-    (their GitHub login creates it; nothing is sent automatically)."""
-    log_dir = log_dir or LOG_PATH.parent
-    candidates = [log_dir / "assistkey.log", log_dir / "assistkey.log.1"]
-    excerpt = find_error_excerpt(candidates) or "(no errors logged — describe the issue above)"
+def build_issue_url(repo_url: str = REPO_URL) -> str:
+    """A GitHub 'new issue' URL prefilled with a blank repro template and generic
+    software-version info only — no log content, no config, no URL, nothing that
+    could identify the reporter or their setup. For the user to fill in and submit
+    themselves (their GitHub login creates it; nothing is sent automatically)."""
     body = _ISSUE_TEMPLATE.format(
-        excerpt=excerpt,
         mode="packaged .exe" if getattr(sys, "frozen", False) else "source (python)",
         python_version=platform.python_version(),
         os_version=platform.platform(),
-        config_line=redact_config_public(config) if config is not None else "(unknown)",
     )
     query = urllib.parse.urlencode({"title": "Bug: ", "body": body, "labels": "bug"})
     return f"{repo_url}/issues/new?{query}"
