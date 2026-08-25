@@ -500,6 +500,14 @@ class Overlay:
                                      font=FONT_USER, width=WIDTH - 2 * PAD, justify="center")
                 y = c.bbox(item)[3]
         elif st == RESPONSE:
+            if self._user_text:
+                # Keep your recognised words visible alongside the reply — same
+                # quoted style as Thinking — so you can confirm you were
+                # understood correctly for as long as the reply is shown.
+                item = c.create_text(WIDTH / 2, y, anchor="n", text=f"“{self._user_text}”",
+                                     fill=MUTED, font=FONT_USER,
+                                     width=WIDTH - 2 * PAD, justify="center")
+                y = c.bbox(item)[3] + 10
             c.create_text(WIDTH / 2, y, anchor="n", text=self._assistant.upper(),
                           fill=ACCENT, font=FONT_LABEL)
             y += 24

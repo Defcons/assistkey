@@ -120,9 +120,12 @@ committed.**
 
 The assistant's **reply streams in word-by-word**. Your **own speech** appears
 the moment you release the key, not letter-by-letter as you talk — Home
-Assistant's speech-to-text returns the transcript once, at the end of the
-utterance. Releasing the key is what ends the utterance (true push-to-talk; no
-silence detection).
+Assistant's speech-to-text API only returns a transcript once, after the
+recording ends, with no partial result while you're still talking, so this
+isn't something AssistKey can add on its own. Releasing the key is what ends
+the utterance (true push-to-talk; no silence detection) — and once your words
+appear, they **stay on screen alongside the reply**, so you can always confirm
+you were understood correctly, for as long as the response is shown.
 
 ## Development
 

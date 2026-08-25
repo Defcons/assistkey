@@ -91,3 +91,34 @@ def test_set_level_clamps(root):
     assert ov._level == 1.0            # clamped high
     ov.set_level(-5.0)
     assert 0.0 <= ov._level <= 1.0     # clamped low (with release smoothing)
+
+
+def test_transcript_stays_visible_during_response(root):
+    # The user's recognised words should persist into the RESPONSE popup
+    # (not just Thinking) so they can confirm they were understood correctly
+    # for as long as the reply is shown.
+    ov = Overlay(root, cfg.Config())
+    ov.listening()
+    _pump(root, 0.6)  # let the slide-in fully settle before the next transition
+    ov.thinking()
+    _pump(root, 0.6)  # ditto for listening -> thinking, or response_reset below
+    ov.set_user_text("turn on the office lights")  # its own state, no transition
+    _pump(root, 0.2)
+    ov.response_reset()
+    _pump(root, 0.6)  # let thinking -> response fully settle
+    ov.response_append("Sure, turning them on.")
+    _pump(root, 0.3)
+    texts = [ov.canvas.itemcget(i, "text") for i in ov.canvas.find_all()
+             if ov.canvas.type(i) == "text"]
+    assert any("turn on the office lights" in t for t in texts)
+    assert any("turning them on" in t for t in texts)
+
+
+def test_transcript_resets_on_new_utterance(root):
+    ov = Overlay(root, cfg.Config())
+    ov.listening()
+    ov.thinking()
+    ov.set_user_text("some old command")
+    _pump(root, 0.3)
+    ov.listening()  # a fresh utterance starting
+    assert ov._user_text == ""

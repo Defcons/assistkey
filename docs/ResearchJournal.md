@@ -331,3 +331,46 @@ couldn't reproduce their exact conversation/timing myself. The instrumentation
 exists so the NEXT occurrence is a direct read of assistkey.log instead of a guess.
 Tests: 54 pass (logging additions are print-only, no behavioural change to verify
 beyond the existing suite).
+
+---
+
+## 2026-08-25 — "See my words as understood" — researched, tried one design, shipped a better one
+
+User: can we show the words I'm speaking during "Listening..."? Checked HA's own
+developer docs directly (developers.home-assistant.io/docs/voice/pipelines/) rather
+than trust memory: the assist_pipeline WebSocket API has exactly ONE event that
+carries transcribed text, `stt-end`, fired once after the full recording is
+processed — no partial/interim transcript event exists. Confirmed this hasn't
+changed recently (TTS got streaming in HA 2025.7; STT still hasn't, as of the HA
+2026.7 build this app is connected to). So live word-by-word text while still
+holding the key is not achievable from AssistKey's side — a genuine HA-protocol
+constraint, not a missing feature here.
+
+**Iteration 1 (built, then reverted):** redesigned the Listening→Thinking handoff
+to morph in place (no slide-out/slide-in) plus a smooth height-grow when the
+transcript arrives, so the HANDOFF itself would feel more continuous given the
+words can only appear after release. Implemented `_morph_to`/`_morph_height` in
+`overlay.py`, verified via a probe (alpha stayed ≥0.97 throughout vs. a real slide's
+dip to 0), added 3 tests, updated README/KnowledgeBase. **User: "revert this, I
+liked it more like it was"** — reverted cleanly via `git restore` (all uncommitted,
+so a clean revert to HEAD, no manual unwinding needed) — and asked instead for the
+words to stay visible for ~1s before the reply, so they have time to confirm they
+were understood.
+
+**Iteration 2 (shipped):** before building a hold-timer, user reconsidered: "Or
+maybe we can show it WHILE responding?" — better than a fixed delay, since it adds
+zero latency (the reply appears exactly as fast as before) AND the words stay
+visible for the FULL reply duration, not just a fixed second. Implemented: `_draw`'s
+RESPONSE branch now also renders the quoted `_user_text` (same `MUTED`/`FONT_USER`
+quoted style already used in THINKING) above the `ASSISTANT` label, when present.
+No new timers, no state-machine changes — purely additive to the existing draw
+call. `_user_text` already resets to `""` in `listening()` at the start of every
+utterance, so there's no risk of a stale transcript bleeding into a later reply.
+
+**Verified:** a probe confirmed the transcript persists into RESPONSE and a fresh
+utterance clears it correctly. Wrote 2 regression tests; the first version was
+flaky (called `response_reset()`+`response_append()` back-to-back with pumps too
+short for the prior Listening→Thinking slide to have settled, which correctly
+chains a second transition but meant the test inspected content before it had
+fully caught up) — not a feature bug, a test-timing bug; fixed with more realistic
+pump durations and confirmed stable across 3 repeated runs. 56 tests pass overall.

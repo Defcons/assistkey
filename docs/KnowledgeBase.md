@@ -2,7 +2,7 @@
 
 _The distilled MODEL: how AssistKey actually behaves. Every claim tagged FACT / HYPOTHESIS / ASSUMPTION / UNKNOWN. Read this first for behaviour/design reasoning. Numbers owned by code live in code — this points to them._
 
-_Last verified: 2026-08-24 — hotkey capture removed; diagnostics + redacted issue reporting added; barge-in always restarts listening; the tts-/dismiss/watchdog chain is now fully logged (was invisible)._
+_Last verified: 2026-08-25 — the transcript now stays visible through the whole reply, not just Thinking._
 
 ## Architecture
 
@@ -28,6 +28,7 @@ _Last verified: 2026-08-24 — hotkey capture removed; diagnostics + redacted is
 - **FACT** — Rounded corners use a magenta (`MAGIC = #ff00ff`) `-transparentcolor` knock-out; on non-Windows the corners just aren't transparent (TclError swallowed).
 - **FACT** — Stuck-popup defence is layered: `_watchdog` (every 3 s, force terminal popups away; Listening is exempt), `_arm_hardhide` backstop after `hide()`, and `_hard_hide` as the unconditional reset that never depends on the transition state machine.
 - **ASSUMPTION** — On-screen visual smoothness matches the measured cadence; the numbers are machine-verified but a human hasn't eyeballed the final build (see `Testing.md`).
+- **FACT** (added 2026-08-25) — The quoted transcript (`self._user_text`) is shown in BOTH the THINKING draw AND the RESPONSE draw (`_draw`'s `elif st == RESPONSE` branch, drawn above the `ASSISTANT` label in the same `MUTED`/`FONT_USER` quoted style as THINKING) — so your recognised words stay visible for the ENTIRE reply, not just the brief THINKING window. `_user_text` is reset to `""` in `listening()` at the start of every utterance, so nothing bleeds across utterances. This does NOT get the reveal-fade treatment (`_body_item`/`_start_reveal` still points only at the assistant's OWN reply text) — the user's words were already visible from Thinking, so they shouldn't visually "arrive" again. Superseded a same-day HA-protocol-constrained "hold Thinking for ~1s" design (see Journal 2026-08-25) — showing the words continuously through the reply achieves the same goal (confirm you were understood) with zero added latency. Tests: `tests/test_overlay.py` (`test_transcript_stays_visible_during_response`, `test_transcript_resets_on_new_utterance`).
 
 ## Pipeline / audio (`assist_client.py`)
 
