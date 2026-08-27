@@ -676,6 +676,8 @@ Verified: a new integration test runs the real `_run_utterance` with a fake stre
 delivers no audio — it returns in ~1 s (no hang), emits the mic error, `("done",)`, and leaves
 `_active=False`/`_idle` set. 71 tests pass. ✕ rendering screenshotted in all three states.
 COMPLETION_TIMEOUT stays 60 s (a slow-but-valid LLM pipeline can legitimately take that long
-for the first token; the dead-mic fail-fast + the manual ✕ handle the common cases). Pending a
-human check (Testing.md): reproduce headset-off and confirm the error shows + the hotkey
-recovers immediately.
+for the first token; the dead-mic fail-fast + the manual ✕ handle the common cases).
+
+**Human-confirmed 2026-08-27:** with the headset off, the "Didn't hear anything…" popup now
+appears fast (no "Thinking…" hang, no wait for HA's "no text recognized"), and the hotkey stays
+responsive afterwards. Shipped in **v1.0.1**.

@@ -8,13 +8,6 @@ _Last updated: 2026-08-27 (dead-mic hang fix; repo now public)_
 
 ## A — Regression checks (things that broke and were fixed — most worth a look)
 
-### A0. Dead-mic hang + hotkey recovery ⭐ (fix 2026-08-27)
-The reported bug: hold-to-talk with the headset/mic OFF → popup stuck in "Thinking…", then the hotkey does nothing on later presses. Machine-verified via an integration test (fake no-audio stream): the utterance returns promptly, emits the mic error, resets `_active`/`_idle`. Confirm live:
-- **Turn your mic off / unplug the headset**, then hold-to-talk and release → a popup **"Didn't hear anything — check your microphone is on and unmuted…"** appears fast (NOT a "Thinking…" hang, and NOT a several-second wait for HA's "no text recognized"). Detection is by signal level (a muted device streams silence, not zero frames), so it also covers a muted mic.
-- **Immediately press the hotkey again** → Listening appears normally (the hotkey is NOT dead). Turn the mic back on → a normal utterance works.
-- **✕ button:** during any Listening/Thinking/Response popup, click the **✕** (top-right) → the popup aborts and the hotkey still works on the next press. (Clicking anywhere on the popup does the same.)
-- `assistkey.log` shows no repeating `restart_utterance: previous utterance stuck` lines afterward.
-
 ### A1. No system-wide input lag / idle stays cold ⭐ highest value
 Two separate root causes fixed here: the removed hotkey-capture keyboard hook (2026-08-24) and the `pump()` clean-close busy loop (2026-08-27). Machine-verified: fresh app idles **0.0 % CPU**; the busy loop is proven fixed 3 ways.
 - Leave AssistKey running a full session. Its `pythonw.exe` (Task Manager) sits ~0 % CPU throughout — **including across a Home Assistant restart/update** (what used to trigger the spin).
