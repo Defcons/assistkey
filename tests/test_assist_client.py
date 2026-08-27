@@ -266,6 +266,45 @@ def test_pump_reconnects_on_error_close():
     assert _pump_until_reconnect(_ErrorClosedWS()) == [1]
 
 
+def test_dead_mic_surfaces_error_and_resets_state(monkeypatch):
+    # The reported hang: hold-to-talk with the mic off/unplugged. The stream opens
+    # but never delivers a frame (on_audio never fires), so the app used to ship an
+    # empty utterance and sit in "Thinking…" for the full completion timeout, THEN
+    # wedge _active/_idle so every later hotkey press dead-ended. Now: a zero-frame
+    # capture is detected on release -> a clear error AND a clean state reset.
+    import assist_client as ac
+
+    class FakeStream:                      # opens fine, delivers no audio (dead mic)
+        def __init__(self, *a, **k): pass
+        def start(self): pass
+        def stop(self): pass
+        def close(self): pass
+    monkeypatch.setattr(ac.sd, "RawInputStream", FakeStream)
+    monkeypatch.setattr(ac.sd, "stop", lambda: None)
+
+    class FakeWS:
+        state = _FakeState("OPEN")
+        async def send(self, *a): pass
+
+    emitted = []
+    client = AssistClient(cfg.Config(), ui=emitted.append)
+    client.ws = FakeWS()
+    client.active_pipeline_name = lambda: "Assistant"
+
+    async def run():
+        client.loop = asyncio.get_running_loop()
+        task = asyncio.ensure_future(client.start_utterance())
+        await asyncio.sleep(0.05)          # stream opened, event loop entered
+        client._release.set()              # user releases the key -> watch_release runs
+        await asyncio.wait_for(task, timeout=5)   # must NOT hang; returns promptly
+    asyncio.run(run())
+
+    assert any(c[0] == "error" and "microphone" in c[1].lower() for c in emitted), emitted
+    assert ("done",) in emitted            # terminal signal fired (resumes wake, resets hotkey)
+    assert client._active is False         # state reset -> the next hotkey press works
+    assert client._idle.is_set()
+
+
 def test_play_returns_promptly_on_barge_in_during_fetch(monkeypatch):
     # The TTS fetch used to be uninterruptible (urlopen in an executor), so a
     # barge-in during a slow fetch left the utterance stuck at `await self._play`

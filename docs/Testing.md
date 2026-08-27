@@ -2,11 +2,18 @@
 
 _Pending manual checks: what needs a human — eyes, a live Home Assistant, or a second machine — that automated tests + probes couldn't cover. Each has repro + pass criteria (runnable cold) + what's already machine-verified. Confirm one → delete it (graduate any durable result to KnowledgeBase/Journal). Ordered most-valuable first. Many B-items are probably already fine from daily use; they just haven't been formally rubber-stamped._
 
-_Last updated: 2026-08-27_
+_Last updated: 2026-08-27 (dead-mic hang fix; repo now public)_
 
 ---
 
 ## A — Regression checks (things that broke and were fixed — most worth a look)
+
+### A0. Dead-mic hang + hotkey recovery ⭐ (fix 2026-08-27)
+The reported bug: hold-to-talk with the headset/mic OFF → popup stuck in "Thinking…", then the hotkey does nothing on later presses. Machine-verified via an integration test (fake no-audio stream): the utterance returns promptly, emits the mic error, resets `_active`/`_idle`. Confirm live:
+- **Turn your mic off / unplug the headset**, then hold-to-talk and release → a popup **"No audio from your microphone — check it's on, plugged in, and not muted…"** appears within a moment (NOT a ~60 s "Thinking…" hang).
+- **Immediately press the hotkey again** → Listening appears normally (the hotkey is NOT dead). Turn the mic back on → a normal utterance works.
+- **✕ button:** during any Listening/Thinking/Response popup, click the **✕** (top-right) → the popup aborts and the hotkey still works on the next press. (Clicking anywhere on the popup does the same.)
+- `assistkey.log` shows no repeating `restart_utterance: previous utterance stuck` lines afterward.
 
 ### A1. No system-wide input lag / idle stays cold ⭐ highest value
 Two separate root causes fixed here: the removed hotkey-capture keyboard hook (2026-08-24) and the `pump()` clean-close busy loop (2026-08-27). Machine-verified: fresh app idles **0.0 % CPU**; the busy loop is proven fixed 3 ways.
@@ -78,8 +85,8 @@ Settings → Startup ON → Save → `HKCU\Software\Microsoft\Windows\CurrentVer
 ### C1. Standalone .exe — needs a machine WITHOUT the dev venv
 Build with `build.bat`, copy `dist\AssistKey.exe` to a clean Windows box: tray starts, Settings opens, hold-to-talk works, wake-word downloads its model on first enable.
 
-### C2. "Report an issue…" — BLOCKED on the public repo
-Machine-verified: a draft built against your REAL config + a realistic crash log has no HA host / Windows username / IP / token, while the real error text (message, exception type, file/line) survives. But the opened link 404s until `github.com/Defcons/assistkey` is public. Once live: tray → **Report an issue…** opens a prefilled GitHub draft; the excerpt is the most recent error, redacted; your token is absent; nothing is sent until you click Submit.
+### C2. "Report an issue…" — now UNBLOCKED (repo is public as of 2026-08-27)
+Machine-verified: a draft built against your REAL config + a realistic crash log has no HA host / Windows username / IP / token, while the real error text (message, exception type, file/line) survives. The repo is now public, so the link no longer 404s. Quick human click-through: tray → **Report an issue…** → a prefilled GitHub draft opens in the browser; the excerpt is the most recent error, redacted; your token is absent; nothing is sent until you click Submit.
 
 ---
 

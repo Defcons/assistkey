@@ -426,8 +426,11 @@ class AssistClient:
         finished = asyncio.Event()
 
         dsp = _MicDSP(self.config.mic_gain_db, self.config.mic_highpass)
+        captured_any = False  # did the mic deliver ANY audio? a dead/off/held device delivers none
 
         def on_audio(indata, frames, t, status):
+            nonlocal captured_any
+            captured_any = True
             arr = np.frombuffer(bytes(indata), dtype=np.int16)
             if dsp.active:
                 arr = dsp.process(arr)   # boost / high-pass BEFORE streaming to HA
@@ -477,6 +480,13 @@ class AssistClient:
             await self._release.wait()
             self.ui(("thinking",))  # key released -> Listening popup out, Thinking popup in
             stop_capture.set()
+            if not captured_any:
+                # The mic streamed ZERO frames the whole time it was held — the device is
+                # off / unplugged / muted at the driver / held exclusively by another app
+                # (a live mic always delivers blocks, even of silence). Don't ship an empty
+                # utterance to HA and sit in "Thinking…" until the completion timeout — say
+                # so now.
+                await events.put({"type": "__nomic__"})
 
         async def forward_audio():
             nonlocal handler_id, buffered
@@ -540,6 +550,10 @@ class AssistClient:
         try:
             while True:
                 msg = await events.get()
+                if msg.get("type") == "__nomic__":
+                    self.ui(("error", "No audio from your microphone — check it's on, "
+                                      "plugged in, and not muted, then try again."))
+                    break
                 if msg.get("type") == "__timeout__":
                     self.ui(("error", "No response — timed out"))
                     break
@@ -601,8 +615,17 @@ class AssistClient:
             finished.set()
             stop_capture.set()
             self._routes.pop(msg_id, None)
+            # BOUND this wait. forward_audio's teardown — sd stream stop/close on a device
+            # that's gone, or a final ws.send on a half-open socket — can hang. If it does,
+            # abandon it: the ("done",) + _active/_idle reset (in start_utterance) below MUST
+            # still run, or the state stays stuck and every later hotkey press dead-ends in
+            # restart_utterance's idle-wait (see ResearchJournal 2026-08-27 mic-hang).
             try:
-                await forwarder  # robust: never raises out (all sends guarded)
+                _, pending = await asyncio.wait({forwarder}, timeout=3)
+                if pending:
+                    log.warning("forward_audio didn't wind down in 3s; abandoning it so the "
+                                "utterance still resets state")
+                    forwarder.cancel()
             except Exception:  # noqa: BLE001 - defensive; done must still fire
                 pass
             for task in (watcher, capper, completer, canceller):

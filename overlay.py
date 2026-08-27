@@ -540,6 +540,12 @@ class Overlay:
         c.tag_lower(card)
         self._h = h
 
+        # A visible ✕ to abort — a discoverable affordance for the click-anywhere-to-cancel
+        # already wired to _on_click. Only in the states where cancelling means something.
+        if st in (LISTENING, THINKING, RESPONSE):
+            c.create_text(WIDTH - 15, 13, anchor="ne", text="✕",
+                          fill=MUTED, font=("Segoe UI", 14))
+
     def _status_row(self, y, label, colour):
         c = self.canvas
         text = label + "." * (self._dots % 4)

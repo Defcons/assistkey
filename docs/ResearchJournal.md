@@ -630,3 +630,47 @@ openWakeWord models still download on first enable (not bundled). `dist/`+`build
 git-ignored — the exe ships as a Release asset, not in the repo. Cutting **v1.0.0** with the
 exe attached; README gained a "Download & run — no Python needed" section (incl. the expected
 unsigned-exe SmartScreen "More info → Run anyway" note) and the new `docs/hero.png`.
+
+---
+
+## 2026-08-27 — Dead-mic hang + the hotkey going dead afterwards (log-diagnosed)
+
+**User report:** hold-to-talk with the headset OFF → popup sticks in "Thinking…", and then
+the hotkey does nothing on later presses. The log settled it cold:
+
+```
+11:56:07  overlay: watchdog force-hiding a stuck thinking popup after 92.0s (limit 90.0s)
+11:56:21  restart_utterance: previous utterance stuck (>5s...); letting it resolve normally
+12:00:00  restart_utterance: previous utterance stuck (>5s...)   ← every later press, for minutes
+```
+
+Two linked bugs:
+1. **Dead mic → hang.** A dead/off/held mic opens fine but `on_audio` never fires, so the app
+   streamed an empty utterance and sat in "Thinking…" until the 60 s completion timeout.
+2. **State wedged → hotkey dead.** After the hang, `_run_utterance` hung in its `finally`
+   (`await forwarder` — forward_audio's teardown, a final `ws.send` on a churny socket / an sd
+   stop on a gone device, never returned). So `start_utterance`'s `finally` never ran →
+   `_active`/`_idle` never reset. `restart_utterance` then timed out its 5 s idle-wait, logged
+   "stuck… letting it resolve", and **returned without starting — forever**. The overlay's own
+   90 s watchdog hid the popup, but nothing reset the CLIENT state.
+
+**Fixes (assist_client + overlay):**
+- **Detect a mic that delivered nothing.** `captured_any` flag set in `on_audio`; on release,
+  if still false, emit `__nomic__` → a clear error ("No audio from your microphone — check
+  it's on, plugged in, and not muted…") instead of shipping empty audio and waiting out the
+  timeout. A live mic always streams (even silence), so zero frames == dead device.
+- **Bound the teardown so state ALWAYS resets.** The `finally`'s `await forwarder` is now
+  `asyncio.wait({forwarder}, timeout=3)`; if it doesn't wind down, abandon it (cancel, don't
+  await) so `_emit_done` + the `_active`/`_idle` reset still run. This is the real cure for the
+  dead-hotkey: `_run_utterance` can no longer hang forever. (Loop wasn't frozen — restart kept
+  logging — so the hang was an await, which this bounds.)
+- **Visible ✕ abort button** on the popup (LISTENING/THINKING/RESPONSE), reusing the existing
+  click-anywhere-to-cancel wiring — now a discoverable way to kill a stuck popup by hand.
+
+Verified: a new integration test runs the real `_run_utterance` with a fake stream that
+delivers no audio — it returns in ~1 s (no hang), emits the mic error, `("done",)`, and leaves
+`_active=False`/`_idle` set. 71 tests pass. ✕ rendering screenshotted in all three states.
+COMPLETION_TIMEOUT stays 60 s (a slow-but-valid LLM pipeline can legitimately take that long
+for the first token; the dead-mic fail-fast + the manual ✕ handle the common cases). Pending a
+human check (Testing.md): reproduce headset-off and confirm the error shows + the hotkey
+recovers immediately.
