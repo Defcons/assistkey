@@ -1,6 +1,6 @@
 # OrientationMap — AssistKey
 
-_Last verified: 2026-08-25 — transcript stays visible through the reply, not just Thinking._
+_Last verified: 2026-08-27 — fixed a pump() busy-loop (clean-close spin) that pegged a core + lagged all system input._
 
 ## What this is
 A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hotkey → talk → release; always-on-top toast shows Listening → your words → the streaming reply, which is also spoken. Python 3.12+ / tkinter + customtkinter, asyncio HA WebSocket, pynput hotkey, pystray tray. Entry: `app.py` (run via `AssistKey.vbs` silent or `run.bat` with a console).
@@ -28,7 +28,8 @@ A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hot
 - **Packaging / CI** — single-file exe via `AssistKey.spec` + `build.bat` → `dist/AssistKey.exe`; tests run on Windows via `.github/workflows/ci.yml`.
 
 ## Global landmines
-- **Never launch the real app to test.** `app.kill_previous_instances()` matches by exe path under `…\.venv\Scripts\python*.exe` and kills the user's running copy, seizing the mic + hotkey. Verify overlay/animation with a standalone `Overlay` on a `tk.Tk()` (see the probe scripts pattern), not by running `app.py`.
+- **A `websockets` `async for` ends WITHOUT raising on a clean (1000) close.** Any `while True: async for x in ws:` MUST handle the no-exception exit (reconnect / break), never re-enter the loop on the dead socket — that's a tight no-await 100%-CPU spin, and because it holds the GIL it starves the pynput keyboard hook and lags ALL Windows input. This bit `AssistClient.pump()` hard (fixed 2026-08-27); see KnowledgeBase §Pipeline/audio. `_request_once` is safe (bounded, raises on close).
+- **Never launch the real app to test** *(routine dev)*. `app.kill_previous_instances()` matches by exe path under `…\.venv\Scripts\python*.exe` and kills the user's running copy, seizing the mic + hotkey. Verify overlay/animation with a standalone `Overlay` on a `tk.Tk()` (see the probe scripts pattern), not by running `app.py`. (Exception: diagnosing a genuine RUNTIME bug like a CPU/hang — launching + measuring is then the right call, as with the 2026-08-27 busy-loop hunt.)
 - **Overlay is main-thread-only.** Every `Overlay` method assumes the Tk main thread; asyncio/tray/wake code must route through the `ui_queue` (`app.App._drain`/`_handle`), never call the overlay directly.
 - **Cosmetic code must never wedge the pump or the transition state machine.** Animation/redraw/timer paths swallow exceptions and always complete the transition (`_animating` reset); the `_drain` loop always reschedules. Preserve this when editing.
 - **`config.json` holds the HA token (DPAPI-encrypted at rest)** — git-ignored; never commit it, never echo it into logs/docs. `config.save` writes it via `dpapi.protect` (per-user encryption) atomically (temp + `os.replace`); `config.load` decrypts to plaintext in memory. Legacy plaintext tokens still load and migrate on next save.

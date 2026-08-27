@@ -212,7 +212,20 @@ class AssistClient:
             self.preferred_pipeline = res["result"].get("preferred_pipeline")
 
     async def pump(self):
-        """Route incoming text frames to whichever call/utterance awaits that id."""
+        """Route incoming text frames to whichever call/utterance awaits that id.
+
+        The `async for` ends on EITHER a clean close or an error close, and BOTH
+        must reconnect. A clean close (HA closing with a normal 1000 code — on a
+        restart, update, or idle timeout) does NOT raise: the websockets async
+        iterator stops silently. So there is no exception to catch — the loop just
+        falls through to the reconnect below. Missing this was a real bug: `while
+        True` would immediately re-enter `async for` on the now-dead socket, which
+        also returns instantly, giving a tight no-await loop that pegged the
+        asyncio thread at 100% CPU. Because that spin holds the GIL, pynput's
+        keyboard-hook callback fell behind and ALL Windows input lagged. Always
+        reconnecting (which awaits) makes a spin impossible. See ResearchJournal
+        2026-08-27.
+        """
         while True:
             try:
                 async for raw in self.ws:
@@ -225,11 +238,13 @@ class AssistClient:
                     q = self._routes.get(msg.get("id"))
                     if q is not None:
                         await q.put(msg)
+                reason = "closed cleanly"   # async for ended with NO exception
             except (websockets.ConnectionClosed, OSError) as exc:
-                log.warning("connection lost (%s); reconnecting", exc.__class__.__name__)
-                self.ui(("disconnected",))
-                self.ui(("status", f"Disconnected ({exc.__class__.__name__}); reconnecting…"))
-                await self._reconnect()
+                reason = exc.__class__.__name__
+            log.warning("connection %s; reconnecting", reason)
+            self.ui(("disconnected",))
+            self.ui(("status", f"Disconnected ({reason}); reconnecting…"))
+            await self._reconnect()   # awaits (connect + backoff sleep) -> never spins
 
     async def _reconnect(self):
         delay = 1

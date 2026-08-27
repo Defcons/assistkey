@@ -374,3 +374,60 @@ short for the prior Listening→Thinking slide to have settled, which correctly
 chains a second transition but meant the test inspected content before it had
 fully caught up) — not a feature bug, a test-timing bug; fixed with more realistic
 pump durations and confirmed stable across 3 repeated runs. 56 tests pass overall.
+
+---
+
+## 2026-08-27 — CPU pegs a core + system-wide input lag: `pump()` clean-close busy loop
+
+**Report (with hard evidence):** AssistKey pegged ~95% of one core, sustained (51%
+lifetime avg over a 19h session); quitting it made desktop-wide keyboard/mouse lag
+vanish instantly; ~36 MB working set (NOT memory); 32 threads. Correct instinct
+from the reporter: a busy loop and/or a slow low-level input hook.
+
+**Investigation.** py-spy is out (can't read Python 3.14.3 — "failed to find python
+version"), and the reported process had already been quit, so no live attach.
+Read the code for the hot loop instead. The `while True` loops in `app.py` (`_drain`,
+`bootstrap`) are all correctly bounded (await/break/reschedule). The smoking gun was
+`AssistClient.pump()`:
+```
+while True:
+    try:
+        async for raw in self.ws: ...
+    except (websockets.ConnectionClosed, OSError): reconnect
+```
+A `websockets` async iterator **stops silently (no exception) on a normal 1000
+close** (which HA sends on restart/update/idle) — so the `except` never fires, and
+`while True` re-enters `async for` on the dead socket, which ALSO returns instantly:
+a tight no-await loop. Holding the GIL, it starves pynput's WH_KEYBOARD_LL callback →
+ALL system input lags. Explains every symptom, including "only after a while" (needs
+one clean close to trigger).
+
+**Proven, not assumed.** A local-websockets probe: on a normal close the first
+`async for` returns with `raised=False`; re-iterating the closed socket runs 100,000
+empty passes in 352 ms = **~284,000 spins/sec, no exception, no await**. That is the
+pegged core.
+
+**Fix (`assist_client.py`).** Set a `reason` in BOTH the try-fell-through
+(`"closed cleanly"`) and `except` branches, then ALWAYS `await self._reconnect()`
+before looping. `_reconnect` awaits (connect + backoff sleep), so a spin is now
+impossible on either close path.
+
+**Verified 3 ways:** (1) unit tests — a cleanly-closed fake ws makes pump reconnect
+(with a `wait_for` timeout + a `sleep(0)` yield in the fake so a REGRESSION fails
+fast instead of hanging); error-close still reconnects. (2) A regression-catch probe
+ran the OLD logic against the same fake and confirmed it times out (reconnect never
+called) — i.e. the test genuinely discriminates. (3) End-to-end: the REAL fixed
+pump() against a REAL local ws that keeps clean-closing → 17 bounded reconnects/sec
+(paced by reconnect's await), not 284k. Fresh app launched via VBS with the fix:
+**0.0% idle CPU**, stable threads.
+
+**The 32 threads — investigated, NOT the cause, not reproduced.** openWakeWord already
+caps its onnxruntime to `inter_op_num_threads=1`/`intra_op_num_threads=1`, so wake is
+not a thread explosion. A fresh idle instance shows 4 threads. The 32 were flagged by
+the reporter as a *possibility*; most consistent with idle native audio-stream pools
+under active voice use, and idle threads don't peg a core regardless — the single
+busy-looping asyncio thread did. Left as: if thread count still grows unbounded over a
+long session AFTER this fix, revisit with a live thread-name dump (see ToDo).
+
+**Aside:** py-spy 0.4.2 cannot profile Python 3.14 — for future live profiling, either
+a py-spy build with 3.14 support or an in-process `sys._current_frames()` sampler.

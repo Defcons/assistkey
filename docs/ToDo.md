@@ -24,3 +24,7 @@ _Last updated: 2026-08-24_
 - [x] 2026-08-23 — Seed the project documentation set.
 - [x] 2026-08-24 — Pre-filled GitHub "Report an issue…" (tray action; user-reviewed draft, not auto-upload). See Journal 2026-08-24.
 - [x] 2026-08-24 — Barge-in always restarts Listening: hotkey/wake now call `restart_utterance()` instead of `start_utterance()`; fixed a real race where the cancelled utterance's stale `done` could clobber hotkey/wake state mid-restart. See Journal 2026-08-24.
+- [x] 2026-08-27 — Fixed a severe `pump()` busy loop: a clean (1000) websocket close ended `async for` with no exception, so `while True` spun on the dead socket at ~284k/sec, pegging a core and lagging ALL system input (GIL-starved keyboard hook). Now always reconnects after the loop ends. See Journal 2026-08-27.
+
+## Open (added 2026-08-27)
+- [ ] **Thread-count watch (low priority, unconfirmed):** the CPU/lag report also noted 32 threads; couldn't reproduce (fresh idle app = 4; openWakeWord already caps onnxruntime to 1 thread/session). Likely idle native audio-stream pools under active use, not a leak — idle threads weren't the CPU cause (the pump spin was). IF thread count grows unbounded over a long session AFTER the pump fix, capture a live thread-name dump (`sys._current_frames()` sampler — py-spy 0.4.2 can't read Python 3.14) and investigate the audio-stream lifecycle in `_run_utterance`.

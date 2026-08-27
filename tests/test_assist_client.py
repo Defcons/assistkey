@@ -193,3 +193,67 @@ def test_restart_utterance_gives_up_after_timeout_and_still_tries_to_start():
             await client.restart_utterance()
     asyncio.run(run_with_faked_timeout())
     assert order == [("cancel", True), ("start", False)]
+
+
+# ---- pump() must reconnect on close, never busy-spin (2026-08-27) ---------------
+
+class _CleanClosedWS:
+    """Async-iterates to nothing, exactly like a websockets connection closed with
+    a normal 1000 code: __anext__ raises StopAsyncIteration, NOT an exception.
+    (Empirically confirmed against real websockets — see ResearchJournal 2026-08-27.)
+    This is the case that used to make pump() spin at 100% CPU. The `sleep(0)`
+    yields to the loop each pass so that IF the busy-loop regression returns, the
+    test's wait_for timeout fires (a fast failure) instead of hanging forever."""
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await asyncio.sleep(0)
+        raise StopAsyncIteration
+
+
+class _ErrorClosedWS:
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await asyncio.sleep(0)
+        raise OSError("connection reset")   # OSError is in pump()'s caught tuple
+
+
+def _pump_until_reconnect(ws):
+    """Run the real pump() with a given ws until it calls _reconnect once, then
+    stop. Wrapped in a short timeout so a REGRESSION (a busy spin that never
+    reaches reconnect) fails fast instead of hanging the suite forever."""
+    client = AssistClient(cfg.Config(), ui=lambda _c: None)
+    client.ws = ws
+    calls = []
+
+    class _Stop(Exception):
+        pass
+
+    async def fake_reconnect():
+        calls.append(1)
+        raise _Stop  # break pump's while-True so the test terminates
+
+    client._reconnect = fake_reconnect
+
+    async def run():
+        try:
+            await asyncio.wait_for(client.pump(), timeout=2.0)
+        except _Stop:
+            pass
+    asyncio.run(run())
+    return calls
+
+
+def test_pump_reconnects_on_clean_close_instead_of_spinning():
+    # THE fix: a clean (no-exception) close must lead to a reconnect. With the bug,
+    # pump would re-iterate the dead socket forever and _reconnect is never called
+    # (the wait_for timeout would then fire as a TimeoutError, failing the test).
+    assert _pump_until_reconnect(_CleanClosedWS()) == [1]
+
+
+def test_pump_reconnects_on_error_close():
+    # The pre-existing error-close path must still reconnect (unchanged behaviour).
+    assert _pump_until_reconnect(_ErrorClosedWS()) == [1]

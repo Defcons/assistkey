@@ -165,3 +165,28 @@ log** and find the most recent conversation's lines.
 
 Paste the relevant `assistkey.log` lines (they're timestamped, so no manual timing
 needed) from the incident and the actual fix follows directly from which case it is.
+
+---
+
+## PENDING — CPU/input-lag fix holds over a long session (2026-08-27)
+
+**Goal:** confirm the pegged-core + system-wide input lag is gone in real multi-hour use.
+
+**Already machine-verified:** the clean-close busy loop is proven (real websockets:
+284k spins/sec on re-iterating a normally-closed socket) and the fix verified 3 ways
+(unit + regression-catch + end-to-end real-ws probe -> 17 bounded reconnects/sec). A
+fresh app launched with the fix idles at 0.0% CPU. 58 tests pass.
+
+**What needs real-world time (needs HA to actually close the socket cleanly, e.g. an
+HA restart/update):**
+1. **Idle stays cold** - leave AssistKey running a full session. Task Manager -> its
+   pythonw.exe should sit ~0% CPU throughout, including across an HA restart/update
+   (which is what used to trigger the spin).
+2. **No input lag** - typing/mouse across Windows feels normal the whole session,
+   especially after HA has restarted at least once while AssistKey ran.
+3. **Reconnect after HA restart** - restart HA; tray goes red then grey within
+   seconds, and assistkey.log shows `connection closed cleanly; reconnecting` then
+   `connected` - NOT a flood (a flood = a rapid clean-close reconnect loop, bounded
+   but worth reporting).
+4. **Thread count** - if you check, note whether threads stay low or grow over hours
+   (see ToDo - unconfirmed secondary observation).
