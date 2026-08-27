@@ -1,200 +1,87 @@
 # Testing — AssistKey
 
-_STRICT pending-manual-test queue. Each entry: repro steps + explicit pass criteria (runnable COLD, weeks later) + what's already machine-verified. Confirmed → graduate the durable result to KnowledgeBase/Journal and DELETE the entry._
+_Pending manual checks: what needs a human — eyes, a live Home Assistant, or a second machine — that automated tests + probes couldn't cover. Each has repro + pass criteria (runnable cold) + what's already machine-verified. Confirm one → delete it (graduate any durable result to KnowledgeBase/Journal). Ordered most-valuable first. Many B-items are probably already fine from daily use; they just haven't been formally rubber-stamped._
 
-_Last updated: 2026-08-24_
-
----
-
-## PENDING — Popup animation smoothness (visual confirmation)
-
-**Why human-only:** the fix is measured at the frame-cadence level, but "does it *look* smooth now" needs eyes. The full app can't be launched by the agent to check — `app.kill_previous_instances()` would terminate the user's running AssistKey and seize the mic + hotkey.
-
-**Already machine-verified (2026-08-23):**
-- Slide frame interval median 17 ms (≈60 fps), was ~23 ms with 31 ms jitter.
-- Tweens time-based; reply fade recolours one item (18×) instead of rebuilding the canvas.
-- `pytest tests/` 15/15 pass.
-
-**Repro:** run the app (`run.bat` for a console, or `AssistKey.vbs` silent). Hold the hotkey (`|` per config, or your setting), speak a short command, release.
-
-**Pass criteria (all must hold):**
-1. The popup slides **up** into place with no visible stutter/steps — one continuous glide, ~0.3 s.
-2. The reply text **fades in** smoothly (colour rises from dim to full) with no flicker or jump.
-3. Streaming replies grow/reposition without tearing or lag.
-4. The popup slides **down** and disappears cleanly after the dismiss delay; never leaves a ghost.
-5. No increase in idle CPU when no popup is showing (timer resolution must drop back — `_timer_raised` False when idle; machine-checked, but confirm the machine doesn't feel busier).
-
-**If still not smooth:** capture whether it's the *slide* (geometry) or the *fade* (alpha/colour); consider that DWM compositing of `-alpha` + `geometry` per frame on a heavily loaded GPU can still cost — next lever would be reducing simultaneous alpha+move, or a shorter travel (`SLIDE`).
+_Last updated: 2026-08-27_
 
 ---
 
-## PENDING — Hotkey capture UX (Settings → "Change…")
+## A — Regression checks (things that broke and were fixed — most worth a look)
 
-**Why human-only:** the capture flow drives a real `pynput` listener into the Tk dialog; the branch logic (Esc/modifier-only/commit) and the suspend/resume of the global hotkey can't be exercised through the unit harness. The `HotkeyListener.suspend` mechanism itself IS unit-tested (`test_suspend_ignores_keys_then_resume_restores`); this is the end-to-end UI check.
+### A1. No system-wide input lag / idle stays cold ⭐ highest value
+Two separate root causes fixed here: the removed hotkey-capture keyboard hook (2026-08-24) and the `pump()` clean-close busy loop (2026-08-27). Machine-verified: fresh app idles **0.0 % CPU**; the busy loop is proven fixed 3 ways.
+- Leave AssistKey running a full session. Its `pythonw.exe` (Task Manager) sits ~0 % CPU throughout — **including across a Home Assistant restart/update** (what used to trigger the spin).
+- Typing/mouse anywhere in Windows feels completely normal the whole time.
+- After an HA restart: tray goes red→grey within seconds; `assistkey.log` shows `connection closed cleanly; reconnecting` then `connected` — a single reconnect, NOT a flood.
 
-**Repro:** run the app, right-click tray → Settings…, click **Change…** next to Hotkey.
+### A2. Barge-in: a hotkey press during a reply always restarts Listening
+Machine-verified end-to-end (fake I/O): mid-TTS barge-in stops audio, emits no stale `done`, starts a fresh utterance.
+- **Mid-speech:** while a reply is being spoken aloud, press the hotkey → it cuts off and Listening appears in **one** press. (During a genuinely *slow* TTS fetch this can still take up to ~15 s — that's the uninterruptible-fetch item in ToDo, not a regression.)
+- **Hold-mode, natural gesture:** barge in, hold, speak, release → ends on release (→ Thinking), not recording until timeout.
+- **Toggle-mode:** same.
+- **Wake word (if on):** saying it while a reply plays also barges in. (Flag if you'd rather it never interrupt.)
 
-**Pass criteria:**
-1. **No interference** — while it says "Press keys — Esc cancels", press your *current* talk hotkey. No Listening popup / no utterance should start (the global hotkey is suspended during capture).
-2. **Normal key** — press e.g. F8. It commits immediately and the box shows "F8".
-3. **Combo** — press Ctrl+Space. Commits "Ctrl + Space".
-4. **Modifier-only** — click Change…, press and hold Ctrl+Shift, release both. Commits "Ctrl + Shift" (previously impossible).
-5. **Esc cancels** — click Change…, press Esc. The box reverts to the previously shown hotkey; nothing changes; the button returns to "Change…".
-6. **After any of the above**, the global hotkey works again (hold it → Listening) — i.e. resume always fired.
-7. **Single-instance** — with Settings open, trigger Settings again from the tray. The existing window is focused, not a second dialog.
-8. **Mid-reconnect** — (hard to stage) if you press the hotkey while HA is reconnecting, you get a brief "Reconnecting to Home Assistant…" popup, not a raw error string.
+### A3. Wake survives a barge-in during a reply (audit fix 2026-08-27)
+With wake-word ON: get a reply, press the hotkey to barge in during it, then confirm the wake word still works afterward (say it → it responds). Before the fix, that sequence left wake paused until restart.
 
----
+### A4. Two quick errors don't stick the popup (audit fix 2026-08-27)
+HA disconnected → press the hotkey twice within a second (two "Reconnecting…" popups). The popup slides away after ~2 s (`dismiss_seconds`), NOT ~22 s. `assistkey.log` shows no `watchdog force-hiding a stuck error popup`.
 
-## PENDING — Feature pass (2026-08-23): manual verification
-
-All are machine-verified where possible (29 unit tests, build+launch of the exe); these need a human with a live Home Assistant.
-
-1. **Tray connection colour** — start with HA unreachable (wrong URL): tray icon is **red**. Fix the URL / connect: turns **grey**. Hold the hotkey: **green** while Listening/working, back to grey after. Drop HA (stop it): returns to red within a few seconds.
-2. **Cancel via tray Stop / clicking the popup** — while a reply is **speaking**, use tray **Stop** or **click the popup** → speech stops immediately and the popup dismisses (no new listening — that's correct here, unlike a hotkey press; see the "Barge-in always restarts Listening" section below for the hotkey case). During **Thinking**, the same two actions also abort cleanly (no stuck popup).
-3. **Mic level meter** — hold the hotkey and speak: a bar under "Listening" rises/falls with your voice; silence → near-empty.
-4. **Follow-up** (Settings → Voice → Follow-up ON; needs an HA agent that asks a question) — after a reply that asks something, the app re-listens automatically (no key press), ends on your silence (HA VAD), and the answer continues the same conversation. With Follow-up OFF, it dismisses as before. If it never auto-listens, capture the `intent-end` payload to confirm where HA put `continue_conversation` (see ToDo).
-5. **Conversation continuity** — with Follow-up OFF, issue a command, then within ~60 s press again and give a context-dependent follow-up ("...and turn it off") — HA should keep context.
-6. **DPAPI token** — open `config.json` after saving: the token shows as `"dpapi:..."`, not plaintext. Test connection still works; a fresh launch stays connected (decrypts). (An existing plaintext token migrates to encrypted on the next Save.)
-7. **Start at login** — Settings → Startup → toggle ON → Save. Check `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` has an `AssistKey` value; sign out/in → app starts silently. Toggle OFF → value removed.
-8. **Standalone exe** — on a machine WITHOUT the dev venv, run `dist\AssistKey.exe`: tray app starts, Settings opens, hold-to-talk works, wake-word downloads its model on first enable. (Build with `build.bat`.)
-9. **Rotating log** — force an error (e.g. bad token so a traceback logs), relaunch, confirm the prior log is preserved as `assistkey.log.1`.
+### A5. Popup looks smooth
+Machine-verified: ~60 fps slide, one-item reply fade, idle timer-resolution drops back.
+- Hold hotkey, speak, release: Listening slides up smoothly (no steps); reply fades in without flicker; streaming text grows without tearing; popup slides away cleanly, no ghost. Your recognised words stay visible through the reply.
 
 ---
 
-## PENDING — QA round (2026-08-23/24)
+## B — Feature confirmations (never formally checked; likely fine from daily use)
 
-1. **No system lag** — with the app running, typing anywhere in Windows must feel completely normal. (The hotkey-capture keyboard hook that caused whole-PC lag has been removed entirely.)
-2. **Save is instant** — change a non-connection setting (e.g. Dismiss after) → Save → the app stays connected (tray stays grey) and works immediately; no multi-second stall. Changing the URL/token reconnects, but promptly.
-3. **Tray click → Settings** — double-click the tray icon (single-click where the OS supports it) opens Settings; right-click still shows the menu.
-4. **Follow-up on a question** — with Follow-up ON, trigger a request the agent can't parse so it replies with a question ("What did you mean?"). The app should auto-listen for your answer (reply ends with "?"), and the popup reads **"Follow-up — answer now"** (not "Listening"). Statements ("Turned on the lights.") should NOT re-listen.
+### B1. Hotkey capture (Settings → Change…)
+The capture flow drives a real pynput listener into the dialog; can't be unit-tested end-to-end.
+1. While capturing ("Press keys — Esc cancels"), pressing your *current* hotkey does NOT start an utterance (global hotkey suspended).
+2. A normal key (e.g. F8) commits immediately; a combo (Ctrl+Space) commits; a **modifier-only** combo (Ctrl+Shift, commit on release) works.
+3. **Esc** cancels (reverts to the previous hotkey).
+4. After any of those, the global hotkey works again (resume fired).
+5. Triggering Settings again while it's open focuses the existing window (no second dialog).
 
----
+### B2. Tray icon states & menu
+- Red when HA unreachable, grey when connected, green while listening/working.
+- Double-click tray → Settings; right-click → menu (Settings / Stop / Open log / Report an issue… / Quit).
+- **Stop**, or **clicking the popup**, while a reply speaks → stops + dismisses (no new Listening — correct for these, unlike a hotkey press). Same during Thinking, no stuck popup.
 
-## PENDING — diagnostics logging (2026-08-24)
+### B3. Mic level meter
+Hold + speak → a bar under "Listening" tracks your voice; silence → near-empty.
 
-**Goal:** field crashes/issues must be diagnosable from the log.
+### B4. Follow-up & conversation continuity (needs an agent that asks questions)
+- Follow-up ON: a reply that asks something → auto re-listens (no keypress), popup reads **"Follow-up — answer now"**, ends on your silence (HA VAD), answer continues the conversation. A statement reply does NOT re-listen.
+- Follow-up OFF: issue a command, then within ~60 s a context-dependent follow-up ("…and turn it off") — HA keeps context.
+- If follow-up never triggers, grab the `intent-end` payload (see the field-path item in ToDo).
 
-1. **Log has real content** — after a normal session, tray → **Open log** (or open `assistkey.log`): it shows timestamped lines — a "session start" banner, a redacted `config:` line, `connected to Home Assistant …`, etc. (Not empty like before.)
-2. **Token is never in the log** — search the log for your actual token string: it must NOT appear (the `config:` line shows `token=set`, not the value).
-3. **Crashes are captured** — cause an error (e.g. set a bad mic device, or wrong URL): the log records it with a traceback and level (ERROR/WARNING/CRITICAL), including errors from background threads (connection, wake).
-4. **Rotation** — over long/repeated use the log stays bounded (`assistkey.log` rolls to `.1/.2/.3` at ~1 MB); history survives restarts (appended, not truncated).
-5. **For a bug report** — "tray → Open log, send me assistkey.log (and .1 if present)" should give enough to diagnose.
+### B5. Settings save is instant
+Change a non-connection setting (e.g. Dismiss after) → Save → stays connected (tray grey), works immediately, no multi-second stall. Changing URL/token reconnects, but promptly.
 
----
+### B6. Token encrypted at rest (DPAPI)
+After Save, `config.json` shows `"ha_token": "dpapi:…"`, not plaintext; Test connection works; a fresh launch stays connected (decrypts). A pre-existing plaintext token migrates on the next Save.
 
-## PENDING — "Report an issue…" (2026-08-24, settled: auto-pulled error, auto-redacted)
+### B7. Start at login
+Settings → Startup ON → Save → `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\AssistKey` exists → sign out/in starts it silently. OFF removes the value.
 
-**Goal:** a one-click path to a GitHub issue draft with the actual recent error attached
-for context — no auto-upload, and no privacy-sensitive substrings in that error text.
-
-**Already machine-verified:** built the draft against your REAL config (actual HA URL,
-actual token) and a realistic crash log — confirmed the real HA host, username, and a
-sample IP were absent from the generated URL/body, while the real error text ("mic open
-failed", exception type, file/line) survived. 49 tests pass.
-
-1. **Opens a real draft** — tray → **Report an issue…** opens your browser to a GitHub "new issue" page (once the repo is public — see caveat below) with the title/body/labels pre-filled. Nothing is sent until YOU click GitHub's Submit button.
-2. **Picks up a real error** — cause an error (e.g. bad mic device), then Report an issue…: the excerpt should be that error's traceback, not older noise.
-3. **Redaction holds on a REAL error** — if the error text happens to include your actual HA URL, your Windows username in a file path, or a local IP, confirm each is replaced with a bracketed placeholder (`[home-assistant-url]`, `[user]`, `[ip]`, `[url]`, `[token]`) rather than shown verbatim — while the actual error message/exception type stays readable.
-4. **No error yet** — on a fresh run with nothing logged, the draft opens with a "no errors logged — describe the issue above" placeholder instead of failing.
-5. **Token check** — your real access token must not appear anywhere in the opened page.
-6. **Still worth a glance** — the template reminds you it's a public issue; the redaction is the main defence, but skim it before hitting Submit in case something slipped through a pattern we didn't anticipate.
-
-**Known caveat:** the target repo (`github.com/Defcons/assistkey`) doesn't exist publicly yet (see the earlier "is this ready to go public" conversation) — until it's pushed, the opened link 404s. The feature is code-complete and unit-tested; this check needs the repo to be live first.
+### B8. Diagnostics log
+- `assistkey.log` has timestamped content (session-start banner, redacted `config:` line, `connected …`).
+- Your real token never appears (search for it — the `config:` line shows `token=set`).
+- Cause an error (bad mic device / wrong URL) → recorded with a traceback + level, including background-thread errors.
+- Log rolls to `.1/.2/.3` at ~1 MB; history survives restarts (appended, not truncated).
 
 ---
 
-## PENDING — Barge-in always restarts Listening (2026-08-24)
+## C — Gated (need setup before they can be checked)
 
-**Goal:** pressing the hotkey while a response is showing — whether it's still being
-SPOKEN or just lingering on screen before dismissal — must always take you straight
-into a fresh Listening popup, in one press.
+### C1. Standalone .exe — needs a machine WITHOUT the dev venv
+Build with `build.bat`, copy `dist\AssistKey.exe` to a clean Windows box: tray starts, Settings opens, hold-to-talk works, wake-word downloads its model on first enable.
 
-**Already machine-verified:** an end-to-end harness driving the real `_run_utterance`
-control flow (fake audio/websocket I/O only) confirmed: barge-in mid-TTS-playback
-stops the audio, does NOT emit a stale `done` that could race the new session, and a
-genuinely new utterance starts (second `assistant`/`listening` pair). 54 unit tests
-pass. See Journal 2026-08-24 for the full trace and the race it fixed.
-
-**What needs a human, with real speech:**
-1. **Mid-speech barge-in** — ask something that gets a reply of a few seconds; while
-   it's being SPOKEN OUT LOUD, press the hotkey again. The reply should cut off
-   immediately and the Listening popup should appear right away (one press, not two).
-2. **Lingering-response barge-in** — let a reply finish speaking and sit on screen
-   during its `dismiss_seconds` countdown; press the hotkey. Listening should slide in
-   and take over cleanly (this path already worked before the fix — confirm it still does).
-3. **Hold-mode integrity** — in hold-mode, do (1) as a natural press-hold-speak-release
-   gesture (not a fast tap): after barging in, hold the key, say your new command, then
-   release normally. Confirm it ends on release (goes to Thinking) rather than
-   recording until it times out — this is the specific race the fix targets.
-4. **Toggle-mode** — same scenarios in tap-to-toggle mode.
-5. **Wake word** (if enabled) — say the wake word while a reply is playing; confirm it
-   also barges in and starts listening (this was extended for consistency alongside
-   the hotkey fix — flag if you'd rather wake word behave differently, e.g. never
-   interrupt an in-progress reply).
+### C2. "Report an issue…" — BLOCKED on the public repo
+Machine-verified: a draft built against your REAL config + a realistic crash log has no HA host / Windows username / IP / token, while the real error text (message, exception type, file/line) survives. But the opened link 404s until `github.com/Defcons/assistkey` is public. Once live: tray → **Report an issue…** opens a prefilled GitHub draft; the excerpt is the most recent error, redacted; your token is absent; nothing is sent until you click Submit.
 
 ---
 
-## PENDING — Diagnose "popup lingers way past dismiss_seconds" (2026-08-24)
-
-**Goal:** the next time this happens, `assistkey.log` should show exactly why —
-no more guessing. `dismiss_seconds` is confirmed 2.0 in config.json; the delay is
-real and needs root-causing from a live occurrence.
-
-**Repro:** use the app normally until the lingering-popup behaviour happens again
-(hopefully soon, ideally on the FIRST try after this update), then tray → **Open
-log** and find the most recent conversation's lines.
-
-**What to look for (this tells us exactly which of three explanations it is):**
-1. **`tts playback finished (%.2fs)` shows an unexpectedly large number** (much
-   longer than the reply actually sounded) → the TTS fetch/decode is slow — likely
-   explanation is a slow/flaky connection to Home Assistant for the audio file
-   itself, independent of the popup logic entirely.
-2. **A gap between `"run-end received"` and `"emitting done"`** → something in our
-   own cleanup (awaiting the audio-forwarder task) is slow — would point at
-   `assist_client.py`, not `overlay.py`.
-3. **`"watchdog force-hiding a stuck ... popup after ...s"` appears** → the normal
-   2 s dismiss never fired at all for that reply; the ~22 s watchdog is what
-   actually removed it. This is the strongest, most specific signal — if you see
-   this line, that's the bug, and the fix would be figuring out why `("done",)`
-   (or `overlay.done()`) never ran for that reply.
-4. **None of the above, chain looks normal and fast** → the delay might be
-   perceptual (e.g., a trailing silence in the generated audio clip making
-   "finished talking" later than it sounds) — worth a stopwatch check against the
-   log's own timestamps.
-
-Paste the relevant `assistkey.log` lines (they're timestamped, so no manual timing
-needed) from the incident and the actual fix follows directly from which case it is.
-
----
-
-## PENDING — CPU/input-lag fix holds over a long session (2026-08-27)
-
-**Goal:** confirm the pegged-core + system-wide input lag is gone in real multi-hour use.
-
-**Already machine-verified:** the clean-close busy loop is proven (real websockets:
-284k spins/sec on re-iterating a normally-closed socket) and the fix verified 3 ways
-(unit + regression-catch + end-to-end real-ws probe -> 17 bounded reconnects/sec). A
-fresh app launched with the fix idles at 0.0% CPU. 58 tests pass.
-
-**What needs real-world time (needs HA to actually close the socket cleanly, e.g. an
-HA restart/update):**
-1. **Idle stays cold** - leave AssistKey running a full session. Task Manager -> its
-   pythonw.exe should sit ~0% CPU throughout, including across an HA restart/update
-   (which is what used to trigger the spin).
-2. **No input lag** - typing/mouse across Windows feels normal the whole session,
-   especially after HA has restarted at least once while AssistKey ran.
-3. **Reconnect after HA restart** - restart HA; tray goes red then grey within
-   seconds, and assistkey.log shows `connection closed cleanly; reconnecting` then
-   `connected` - NOT a flood (a flood = a rapid clean-close reconnect loop, bounded
-   but worth reporting).
-4. **Thread count** - if you check, note whether threads stay low or grow over hours
-   (see ToDo - unconfirmed secondary observation).
-
----
-
-## PENDING — Audit fixes: live confirmation (2026-08-27)
-
-Most audit fixes are probe-verified; two benefit from real-app confirmation with a live HA:
-1. **Wake survives a barge-in during a slow reply** — with wake-word ON, trigger a reply that has a slowish TTS fetch, then press the hotkey to barge in during it. Confirm wake-word listening still works afterward (say the wake word → it responds). Before the fix, that sequence left wake paused until restart. (Note the deferred item: the barge-in itself may still take up to ~15 s to visibly take effect during a slow fetch — that's the uninterruptible-fetch item in ToDo, separate from the stuck-wake fix.)
-2. **Two quick errors don't stick the popup** — with HA disconnected, press the hotkey twice within a second (two "Reconnecting…" popups). The popup should slide away after ~2 s (dismiss_seconds), NOT hang ~22 s for the watchdog. `assistkey.log` should NOT show `watchdog force-hiding a stuck error popup` for this.
+## Retired (resolved — kept out of the queue for reference)
+- **"Diagnose popup lingers past `dismiss_seconds`" (2026-08-24):** root-caused in the 2026-08-27 audit. Two mechanisms, both handled — the repeated-`error()` dismiss bug (FIXED, now A4) and the uninterruptible 15 s TTS fetch (a genuine cause of lingering, now the deferred item in ToDo). The `tts playback finished (%.2fs)` / watchdog logging stays in place to pinpoint any future case instantly.
