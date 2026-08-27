@@ -546,3 +546,28 @@ controls (gain 9 → "+9 dB"); screenshot refreshed. 66 tests pass.
 Side finding (→ ToDo): the settings dialog is now ~1051 px and overflows a 1080p work
 area (Save off-screen); fine on the dev 2560×1392. Deferred a scrollable-dialog fix as
 a pre-public item, kept separate from this feature.
+
+---
+
+## 2026-08-27 — Settings dialog: height-capped + scrollable (closes the 1080p overflow)
+
+Closes the pre-public item above. Restructured `SettingsDialog.__init__`: the Save/Cancel
+bar is now packed `side="bottom"` into the window FIRST (so it's always visible), and the
+content moved into a `CTkScrollableFrame` packed above it. After build, measure the content
+extent via `body._parent_canvas.bbox("all")` and size the window to it, but cap the height
+to the monitor work area (`monitor_workarea_at` minus a margin) — past that the body scrolls
+instead of the buttons falling off the bottom.
+
+Two gotchas found by screenshotting (can't eyeball via the running app — single-instance
+would kill the user's copy):
+1. **A `CTkScrollableFrame` doesn't report its content's width** — `winfo_reqwidth()`
+   collapsed to 257 px and clipped every row on the right. Fixed with an explicit width
+   (416 px = the old ~402 px content + scrollbar).
+2. **Its scrollbar doesn't auto-hide when content fits** — left a full-height, non-scrolling
+   thumb on tall screens. Now `body._scrollbar.grid_remove()` only when the content fits
+   (kept when the cap engages and it's actually usable). Both reach into CTk internals, so
+   both are try/except-guarded.
+
+Verified (screenshots + a probe monkeypatching `monitor_workarea_at` to a 1080p work area):
+caps to 984 px with the Save button still `winfo_ismapped` and content unclipped; normal
+render on the dev screen sizes to content (1081 px) with no scrollbar. 66 tests pass.

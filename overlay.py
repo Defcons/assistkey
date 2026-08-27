@@ -877,8 +877,20 @@ class SettingsDialog:
         apply_dark_titlebar(win)
         win.after(80, lambda: apply_dark_titlebar(win))  # re-apply once mapped
 
-        body = ctk.CTkFrame(win, fg_color=S_BG)
-        body.pack(fill="both", expand=True, padx=22, pady=16)
+        # Save/Cancel bar pinned at the BOTTOM (packed first so it stays visible even
+        # when the content is taller than the screen and the body scrolls).
+        br = ctk.CTkFrame(win, fg_color=S_BG)
+        br.pack(side="bottom", fill="x", padx=22, pady=(6, 14))
+        ctk.CTkButton(br, text="Save", command=self._save, width=100, height=36, corner_radius=10,
+                      fg_color=S_ACCENT, hover_color=S_ACCENT_HOVER, text_color="#0b1020",
+                      font=("Segoe UI Semibold", 12)).pack(side="right")
+        ctk.CTkButton(br, text="Cancel", command=self._cancel, width=100, height=36, corner_radius=10,
+                      fg_color=S_FIELD, hover_color=S_HOVER, text_color=S_FG).pack(side="right", padx=(0, 8))
+
+        # Scrollable content fills the space above the buttons — keeps the dialog usable
+        # on small screens as it grows (it now exceeds a 1080p work area).
+        body = ctk.CTkScrollableFrame(win, fg_color=S_BG)
+        body.pack(side="top", fill="both", expand=True, padx=16, pady=(16, 0))
 
         ctk.CTkLabel(body, text="AssistKey", text_color=S_FG,
                      font=("Segoe UI Semibold", 16)).pack(anchor="w")
@@ -1043,26 +1055,36 @@ class SettingsDialog:
             tip="Launch AssistKey automatically when you sign in to Windows "
                 "(adds a per-user startup entry; no admin needed).")
 
-        # --- Buttons ---
-        br = ctk.CTkFrame(body, fg_color="transparent")
-        br.pack(fill="x", pady=(18, 0))
-        ctk.CTkButton(br, text="Save", command=self._save, width=100, height=36, corner_radius=10,
-                      fg_color=S_ACCENT, hover_color=S_ACCENT_HOVER, text_color="#0b1020",
-                      font=("Segoe UI Semibold", 12)).pack(side="right")
-        ctk.CTkButton(br, text="Cancel", command=self._cancel, width=100, height=36, corner_radius=10,
-                      fg_color=S_FIELD, hover_color=S_HOVER, text_color=S_FG).pack(side="right", padx=(0, 8))
-
+        # Size to content, but CAP the height to the monitor work area — then the body
+        # scrolls instead of the Save button falling off the bottom of the screen.
         win.update_idletasks()
-        w, h = win.winfo_width(), win.winfo_height()
-        area = monitor_workarea_at(*win.winfo_pointerxy())  # centre on the active monitor
+        area = monitor_workarea_at(*win.winfo_pointerxy())
         if area:
             left, top, right, bottom = area
-            x = left + (right - left - w) // 2
-            y = top + max(40, (bottom - top - h) // 3)
         else:
-            x = (win.winfo_screenwidth() - w) // 2
-            y = max(40, (win.winfo_screenheight() - h) // 3)
-        win.geometry(f"+{x}+{y}")
+            left, top, right, bottom = 0, 0, win.winfo_screenwidth(), win.winfo_screenheight()
+        try:
+            box = body._parent_canvas.bbox("all")   # full content extent of the scroll frame
+            content_h = (box[3] - box[1]) if box else 700
+        except Exception:  # noqa: BLE001 - internals could change; fall back to a safe cap
+            content_h = 700
+        # Fixed width — a CTkScrollableFrame doesn't report its content's width, so
+        # winfo_reqwidth() collapses and would clip the rows. This fits the content
+        # (same rows as the old ~402 px dialog) plus the scrollbar.
+        w = 416
+        desired_h = content_h + br.winfo_reqheight() + 80    # + button bar + paddings + slack
+        area_h = (bottom - top) - 48                         # never taller than the work area
+        if desired_h <= area_h:
+            h = desired_h
+            try:                    # content fits — hide the idle (non-scrolling) scrollbar
+                body._scrollbar.grid_remove()
+            except Exception:       # noqa: BLE001 - internals could change; harmless if so
+                pass
+        else:
+            h = area_h              # capped: the scrollbar stays and is actually used
+        x = left + (right - left - w) // 2
+        y = top + max(20, (bottom - top - h) // 3)
+        win.geometry(f"{w}x{h}+{x}+{y}")
 
     # ---- widgets ------------------------------------------------------------
 
