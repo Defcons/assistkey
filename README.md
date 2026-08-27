@@ -182,7 +182,3 @@ Tray → **Open log** and drag `assistkey.log` in yourself.
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-## License
-
-MIT — see [LICENSE](LICENSE).
