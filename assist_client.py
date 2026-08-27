@@ -122,6 +122,47 @@ def _list_devices(cap: str) -> list[tuple[int, str]]:
     return [(i, d["name"]) for i, d in enumerate(devices) if d[cap] > 0]
 
 
+class _MicDSP:
+    """Optional in-app conditioning applied to each 16-bit mic block BEFORE it is
+    streamed to Home Assistant: a linear boost (from dB, hard-clipped so it can't
+    overflow int16) and an optional 1st-order high-pass / DC-blocker (~80 Hz) that
+    trims mains hum, rumble and DC bias.
+
+    STT runs on HA (Whisper etc.), which is noise-robust and prefers natural audio —
+    so this deliberately does LEVEL + gentle cleanup only, never aggressive
+    denoising (which tends to hurt recognition). Stateful across blocks (the filter
+    carries memory); one instance per utterance.
+    """
+    _HP_A = 0.969   # ~80 Hz cutoff at 16 kHz for the 1st-order high-pass
+
+    def __init__(self, gain_db: float, highpass: bool):
+        self._gain = float(10.0 ** (float(gain_db) / 20.0))
+        self._highpass = bool(highpass)
+        self._x1 = 0.0   # previous input  \ high-pass state carried
+        self._y1 = 0.0   # previous output /  across blocks
+
+    @property
+    def active(self) -> bool:
+        """True only if it would change the audio (else the caller skips it entirely)."""
+        return self._highpass or abs(self._gain - 1.0) > 1e-3
+
+    def process(self, samples: np.ndarray) -> np.ndarray:
+        x = samples.astype(np.float32)
+        if self._highpass:
+            a, x1, y1 = self._HP_A, self._x1, self._y1
+            out = []
+            for xi in x.tolist():          # ~1600 samples/block, 10/s — cheap
+                y1 = xi - x1 + a * y1      # DC-blocker: ~unity passband gain
+                x1 = xi
+                out.append(y1)
+            self._x1, self._y1 = x1, y1
+            x = np.asarray(out, dtype=np.float32)
+        if self._gain != 1.0:
+            x *= self._gain
+        np.clip(x, -32768.0, 32767.0, out=x)   # hard-clip so the boost can't overflow
+        return x.astype(np.int16)
+
+
 class AssistClient:
     def __init__(self, config, ui):
         self.config = config
@@ -384,11 +425,15 @@ class AssistClient:
         stop_capture = asyncio.Event()
         finished = asyncio.Event()
 
+        dsp = _MicDSP(self.config.mic_gain_db, self.config.mic_highpass)
+
         def on_audio(indata, frames, t, status):
-            b = bytes(indata)
-            audio_q.put(b)
-            # Emit a mic level (0..1 peak) for the Listening meter. Cheap; ~10/s.
-            arr = np.frombuffer(b, dtype=np.int16)
+            arr = np.frombuffer(bytes(indata), dtype=np.int16)
+            if dsp.active:
+                arr = dsp.process(arr)   # boost / high-pass BEFORE streaming to HA
+            audio_q.put(arr.tobytes())
+            # Emit a mic level (0..1 peak) for the Listening meter — on the PROCESSED
+            # signal, so the bar reflects what HA receives (dial the boost by it). ~10/s.
             if arr.size:
                 self.ui(("level", float(np.abs(arr).max()) / 32768.0))
 

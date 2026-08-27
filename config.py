@@ -66,6 +66,8 @@ class Config:
     wake_word: str = "hey_jarvis"          # openWakeWord model name
     wake_sensitivity: float = 0.5          # 0–1 detection threshold (higher = stricter)
     mic_device: int | None = None          # sounddevice index; None = default
+    mic_gain_db: float = 0.0               # in-app mic boost in dB before streaming; 0 = off
+    mic_highpass: bool = False             # gentle high-pass/DC-blocker to trim hum & rumble
     speaker_device: int | None = None      # sounddevice index; None = default
     pipeline: str | None = None            # HA pipeline id; None = preferred
     dismiss_seconds: float = 2.0           # seconds the popup lingers AFTER the reply is spoken
@@ -109,6 +111,8 @@ class Config:
             "wake_word": self.wake_word,
             "wake_sensitivity": self.wake_sensitivity,
             "mic_device": self.mic_device,
+            "mic_gain_db": self.mic_gain_db,
+            "mic_highpass": self.mic_highpass,
             "speaker_device": self.speaker_device,
             "pipeline": self.pipeline,
             "dismiss_seconds": self.dismiss_seconds,

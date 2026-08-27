@@ -104,6 +104,8 @@ your Startup folder (`Win+R` → `shell:startup`).
 | **Hotkey** | Click *Change…* then press the key (or combo, e.g. `Ctrl`+`Space`). |
 | **Trigger** | *Hold to talk* (hold while speaking) or *Tap to toggle* (tap on, tap off). |
 | **Microphone / Speaker** | Input and output devices, or the system defaults. |
+| **Mic boost** | Amplify a quiet mic (0–30 dB) before sending to Home Assistant — watch the level bar in the Listening popup and set it so your voice fills the bar without maxing out. Off by default. |
+| **Reduce hum** | A gentle high-pass filter that trims low-frequency hum, rumble and DC offset. Safe for speech; off by default. |
 | **Assistant** | Which HA pipeline to use; *Preferred* follows your HA default. |
 | **Wake word** | Enable hands-free listening and pick the word (Hey Jarvis / Alexa / …). Off by default; downloads a small local model on first enable. |
 | **Sensitivity** | Wake-word detection threshold — higher is stricter (fewer false triggers). |

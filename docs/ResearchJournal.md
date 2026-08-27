@@ -519,3 +519,30 @@ Verified: probe — barge-in during a blocked fetch returns `_play` in **15 ms**
 up to the full timeout); a second probe confirmed the NORMAL fetch→decode→play→done
 path is intact; unit test `test_play_returns_promptly_on_barge_in_during_fetch` runs
 clean under `-W error::RuntimeWarning` (no orphan-thread warning). 60 tests pass.
+
+---
+
+## 2026-08-27 — In-app mic conditioning (boost + gentle high-pass)
+
+User asked whether we can raise mic level / reduce noise app-side to improve
+recognition. Framed the reality first: STT runs on HA (Whisper etc.), so we can only
+condition WHAT WE SEND — and modern STT is noise-robust and often does WORSE on
+heavily denoised audio. So the reliable win is LEVEL (good SNR), not denoising. User
+picked the recommended "boost + gentle cleanup, no denoising" scope.
+
+Added `_MicDSP` (assist_client): per-utterance, in `on_audio` before queuing to HA,
+skipped when neutral. A linear boost from `mic_gain_db` (hard-clipped to int16) and an
+optional 1st-order high-pass/DC-blocker (~80 Hz, stateful) from `mic_highpass`. The
+level meter now reflects the processed signal so the boost can be dialled in by eye.
+Settings → Voice: "Mic boost" slider (0..+30 dB, label "off"/"+N dB") + "Reduce hum"
+toggle. Both default OFF (no silent change for existing configs). No new dependencies
+(numpy only; high-pass is a short per-block loop — cheap, only during capture).
+
+Verified: 6 DSP unit tests (inactive-when-neutral, +6 dB ≈ ×2, +12 dB on a loud signal
+hard-clips instead of int16-wrapping, DC offset decays through the high-pass, state
+carries across blocks, a 440 Hz tone survives). Settings dialog builds with the new
+controls (gain 9 → "+9 dB"); screenshot refreshed. 66 tests pass.
+
+Side finding (→ ToDo): the settings dialog is now ~1051 px and overflows a 1080p work
+area (Save off-screen); fine on the dev 2560×1392. Deferred a scrollable-dialog fix as
+a pre-public item, kept separate from this feature.

@@ -940,6 +940,26 @@ class SettingsDialog:
         self.mic_var = tk.StringVar()
         self._option(body, "Microphone", self.mic_map, config.mic_device, self.mic_var,
                      tip="Which microphone to record your voice from, or your Windows default.")
+        gr = ctk.CTkFrame(body, fg_color="transparent")
+        gr.pack(fill="x", pady=4)
+        ctk.CTkLabel(gr, text="Mic boost", text_color=S_MUTED, width=self.LABEL_W, anchor="w",
+                     font=("Segoe UI", 12)).pack(side="left")
+        self.gain_var = tk.IntVar(value=int(round(config.mic_gain_db)))
+        gain = ctk.CTkSlider(gr, from_=0, to=30, number_of_steps=30, variable=self.gain_var,
+                             command=self._on_gain, progress_color=S_ACCENT, button_color=S_ACCENT,
+                             button_hover_color=S_ACCENT)
+        gain.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.gain_label = ctk.CTkLabel(gr, text=self._gain_text(config.mic_gain_db), text_color=S_FG,
+                                       width=40, font=("Segoe UI", 12))
+        self.gain_label.pack(side="left")
+        _Tooltip(gain, "Amplify a quiet mic before sending to Home Assistant. Watch the level bar "
+                       "in the Listening popup and set it so your normal voice fills the bar without "
+                       "maxing out (clipping hurts recognition). 0 = off.")
+        self.highpass_var = self._toggle_row(
+            body, "Reduce hum", config.mic_highpass,
+            tip="A gentle high-pass filter that trims low-frequency hum, rumble and DC offset before "
+                "sending to Home Assistant. Safe for speech. (Real noise suppression is intentionally "
+                "not offered — modern speech-to-text usually does WORSE on heavily denoised audio.)")
         self.spk_map = [("Default speaker", None)] + [(lbl, idx) for idx, lbl in list_output_devices()]
         self.spk_var = tk.StringVar()
         self._option(body, "Speaker", self.spk_map, config.speaker_device, self.spk_var,
@@ -1100,6 +1120,14 @@ class SettingsDialog:
     def _on_sens(self, value):
         self.sens_label.configure(text=f"{float(value):.2f}")
 
+    @staticmethod
+    def _gain_text(db) -> str:
+        db = int(round(float(db)))
+        return "off" if db <= 0 else f"+{db} dB"
+
+    def _on_gain(self, value):
+        self.gain_label.configure(text=self._gain_text(value))
+
     def _test(self):
         url, token = self.url_var.get(), self.token_var.get()
         self.test_result.configure(text="Testing…", text_color=S_MUTED)
@@ -1187,6 +1215,8 @@ class SettingsDialog:
         self.config.hotkey = self.pending_hotkey or ["f9"]
         self.config.trigger_mode = self._value_for(self.trigger_map, self.trigger_var) or "hold"
         self.config.mic_device = self._value_for(self.mic_map, self.mic_var)
+        self.config.mic_gain_db = float(self.gain_var.get())
+        self.config.mic_highpass = bool(self.highpass_var.get())
         self.config.speaker_device = self._value_for(self.spk_map, self.spk_var)
         self.config.pipeline = self._value_for(self.pipe_map, self.pipe_var)
         self.config.wake_enabled = bool(self.wake_var.get())
