@@ -571,3 +571,34 @@ would kill the user's copy):
 Verified (screenshots + a probe monkeypatching `monitor_workarea_at` to a 1080p work area):
 caps to 984 px with the Save button still `winfo_ismapped` and content unclipped; normal
 render on the dev screen sizes to content (1081 px) with no scrollbar. 66 tests pass.
+
+---
+
+## 2026-08-27 — Public release: history rewritten to a clean identity, force-pushed
+
+Goal: ship AssistKey publicly and get it out of the active working flow. Readiness scan came
+back clean — `.gitignore` covers `config.json`/logs/venv/build, `config.json` was **never**
+committed (no token in history), no personal data in any tracked file's *contents*, both
+screenshots generic, LICENSE + README present. Two small doc fixes: dropped a duplicated
+`## License` block in the README, and made CI trigger on `main` too (a fresh GitHub repo
+defaults to `main`, so `on: push: branches:[master]` alone would silently never run).
+
+**The real blocker was commit metadata, not files.** All 29 historical commits carried the
+author's personal Gmail, and `github.com/Defcons/assistkey` was already reachable (public),
+so the address was effectively already exposed. Chosen fix (over a squashed snapshot): keep
+the full history but rewrite every author+committer identity to `Defcons
+<Defcons@users.noreply.github.com>` via `git filter-branch --env-filter` (git-filter-repo
+wasn't installed). LICENSE credit set to **Defcons** to match.
+
+Verified before pushing: all 30 commits → the single noreply identity, **zero Gmail** in any
+author/committer/message field, `git diff pre-rewrite-backup master` empty (file content
+untouched by the rewrite), all Claude co-author trailers intact, 66 tests pass. Set the
+repo-LOCAL `user.email`/`user.name` to the noreply identity so future commits can't
+re-introduce the Gmail. Then `git push --force origin master` (`c799aef` → `f8e9f8d`);
+re-fetched and confirmed `origin/master` is clean and in sync. Purged the local Gmail
+remnants too (deleted `pre-rewrite-backup` + `refs/original`, reflog-expired + `gc --prune`).
+
+Caveat recorded for later: GitHub can still serve the old pre-force-push commits by SHA for a
+while (until its own gc); a personal repo with no forks/PRs leaves them unreferenced and they
+age out. Contact GitHub Support only if prompt purge is needed. Optional follow-up: rename the
+default branch `master` → `main`.
