@@ -277,9 +277,18 @@ class Overlay:
             self._enter(RESPONSE)
 
     def error(self, message: str):
-        self._cancel_dismiss()
         self._response = message
+        self._touch()               # keep _last_change fresh so the watchdog measures from NOW
         self._enter(ERROR)
+        # ALWAYS (re)start the dismiss timer here. ERROR otherwise self-schedules its
+        # dismiss ONLY from _finish (the transition path); a repeated error() on an
+        # already-settled error popup takes _enter's same-state _refresh branch, which
+        # skips _finish — so the previously-scheduled dismiss would be cancelled and
+        # never replaced, leaving the popup up until the ~22 s watchdog. Two quick
+        # ("error","Reconnecting…") events (e.g. hotkey pressed twice while HA is down)
+        # hit exactly this. _schedule_dismiss cancels-then-reschedules, so it's safe on
+        # both the transition path (redundant with _finish) and the settled path.
+        self._schedule_dismiss()
 
     def done(self):
         self._schedule_dismiss()
@@ -1100,8 +1109,14 @@ class SettingsDialog:
                 ok, msg = asyncio.run(test_credentials(url, token))
             except Exception as exc:  # noqa: BLE001
                 ok, msg = False, str(exc)
-            self.win.after(0, lambda: self.test_result.configure(
-                text=msg, text_color=(S_OK if ok else S_ERR)))
+            # The dialog may have been closed (destroyed) while the network test ran;
+            # marshalling back onto a dead window would raise on this worker thread.
+            try:
+                if self.win.winfo_exists():
+                    self.win.after(0, lambda: self.test_result.configure(
+                        text=msg, text_color=(S_OK if ok else S_ERR)))
+            except tk.TclError:
+                pass
 
         threading.Thread(target=worker, daemon=True).start()
 

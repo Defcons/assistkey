@@ -181,6 +181,7 @@ class App:
         self.ui_queue: "queue.Queue" = queue.Queue()
         self._connected = False
         self._follow_up_next = False   # the next Listening is an auto follow-up
+        self._quitting = False         # set in _quit so _drain stops rescheduling on a dead root
 
         self.loop = asyncio.new_event_loop()
         self.client = AssistClient(self.config, ui=lambda cmd: self.ui_queue.put(cmd))
@@ -238,19 +239,28 @@ class App:
     # ---- hotkey -> asyncio --------------------------------------------------
 
     def _hotkey_down(self):
-        if self.config.wake_enabled:
-            self.wake.pause()  # free the mic for the utterance
-        # restart_utterance cancels any in-flight reply first (even mid-TTS
-        # playback) so the Listening popup always takes over — one press always
-        # gets you talking, instead of the first press just stopping the old
-        # reply and requiring a second press to actually start listening.
-        # notify_unavailable: a deliberate key-press deserves feedback if we're
-        # not connected yet (a gentle "Reconnecting…" instead of a raw error).
-        asyncio.run_coroutine_threadsafe(
-            self.client.restart_utterance(notify_unavailable=True), self.loop)
+        # Runs on the pynput listener thread. An exception escaping here would make
+        # pynput STOP the listener permanently (a stopped Listener can't restart) —
+        # a dead hotkey with the tray still alive. Isolate it.
+        try:
+            if self.config.wake_enabled:
+                self.wake.pause()  # free the mic for the utterance
+            # restart_utterance cancels any in-flight reply first (even mid-TTS
+            # playback) so the Listening popup always takes over — one press always
+            # gets you talking, instead of the first press just stopping the old
+            # reply and requiring a second press to actually start listening.
+            # notify_unavailable: a deliberate key-press deserves feedback if we're
+            # not connected yet (a gentle "Reconnecting…" instead of a raw error).
+            asyncio.run_coroutine_threadsafe(
+                self.client.restart_utterance(notify_unavailable=True), self.loop)
+        except Exception:  # noqa: BLE001 - never let the hotkey listener die
+            log.exception("hotkey_down failed")
 
     def _hotkey_up(self):
-        self.loop.call_soon_threadsafe(self.client.signal_release)
+        try:
+            self.loop.call_soon_threadsafe(self.client.signal_release)
+        except Exception:  # noqa: BLE001 - never let the hotkey listener die
+            log.exception("hotkey_up failed")
 
     def _on_wake(self):
         # Runs on the wake thread: pause listening, chime, run one utterance.
@@ -277,7 +287,8 @@ class App:
                     log.exception("error handling UI command %r", cmd)
         except queue.Empty:
             pass
-        self.root.after(20, self._drain)  # ALWAYS reschedule — the UI pump must never die
+        if not self._quitting:
+            self.root.after(20, self._drain)  # reschedule — the UI pump must never die (until quit)
 
     def _set_idle_icon(self):
         """Tray icon at rest: grey when connected, red when not."""
@@ -366,6 +377,7 @@ class App:
 
     def _quit(self):
         log.info("quit requested")
+        self._quitting = True   # stop _drain rescheduling after root is destroyed (avoids a TclError)
         try:
             self.icon.stop()
         except Exception:  # noqa: BLE001

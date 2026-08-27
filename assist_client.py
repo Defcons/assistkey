@@ -177,14 +177,25 @@ class AssistClient:
             raise RuntimeError("Home Assistant URL/token not configured")
         self.server = url.rstrip("/")
         self.token = token
-        self.ws = await websockets.connect(_ws_url(self.server), max_size=None)
-        hello = json.loads(await self.ws.recv())
-        if hello.get("type") != "auth_required":
-            raise RuntimeError(f"Unexpected handshake: {hello}")
-        await self.ws.send(json.dumps({"type": "auth", "access_token": self.token}))
-        reply = json.loads(await self.ws.recv())
-        if reply.get("type") != "auth_ok":
-            raise RuntimeError(f"Auth failed: {reply}")
+        ws = await websockets.connect(_ws_url(self.server), max_size=None)
+        try:
+            hello = json.loads(await ws.recv())
+            if hello.get("type") != "auth_required":
+                raise RuntimeError(f"Unexpected handshake: {hello}")
+            await ws.send(json.dumps({"type": "auth", "access_token": self.token}))
+            reply = json.loads(await ws.recv())
+            if reply.get("type") != "auth_ok":
+                raise RuntimeError(f"Auth failed: {reply}")
+        except BaseException:
+            # Close the just-opened socket on ANY failure (auth error, cancel, bad
+            # handshake) so a failed connect doesn't leak an open connection each
+            # retry — and only publish self.ws once it's fully authenticated.
+            try:
+                await ws.close()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        self.ws = ws
         log.info("connected to Home Assistant %s at %s", reply.get("ha_version"), self.server)
         self.ui(("status", f"Connected (HA {reply.get('ha_version')})"))
         self.ui(("connected",))
@@ -351,8 +362,20 @@ class AssistClient:
             self.request_cancel(suppress_done=True)
             try:
                 await asyncio.wait_for(self._idle.wait(), timeout=5)
-            except asyncio.TimeoutError:  # noqa: BLE001 - safety net; proceed anyway
-                log.warning("restart_utterance: previous utterance did not wind down in time")
+            except asyncio.TimeoutError:
+                # The old utterance did NOT wind down in time — almost always
+                # because it's stuck in a slow TTS fetch (`_play`'s urlopen, which
+                # sd.stop() can't interrupt). We are NOT going to replace it now, so
+                # we must NOT swallow its terminal ("done",): that signal is the ONLY
+                # thing that resumes wake-word listening and resets hotkey state. Leave
+                # `_suppress_next_done` armed and the old run's done would be eaten →
+                # wake stuck paused forever (see ResearchJournal 2026-08-27 audit).
+                # Un-arm it and let the old run resolve normally (its queued __cancel__
+                # ends it once the fetch returns); the barge-in becomes a plain cancel.
+                log.warning("restart_utterance: previous utterance stuck (>5s, likely a slow "
+                            "TTS fetch); letting it resolve normally instead of suppressing its done")
+                self._suppress_next_done = False
+                return
         await self.start_utterance(notify_unavailable=notify_unavailable)
 
     async def _run_utterance(self):

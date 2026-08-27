@@ -81,10 +81,10 @@ class WakeListener:
         from openwakeword.model import Model
         from openwakeword.utils import download_models
         if not self._downloaded:
-            try:
-                download_models()  # idempotent; fetches the ~10 MB model set once
-            except Exception:  # noqa: BLE001
-                pass
+            # Mark done ONLY on success — else a transient first-enable download
+            # failure would never be retried, and Model() below would then raise
+            # forever (no model files), permanently disabling wake for the session.
+            download_models()  # idempotent; fetches the ~10 MB model set once
             self._downloaded = True
         self._model = Model(wakeword_models=[word], inference_framework="onnx")
         self._loaded_word = word

@@ -122,3 +122,18 @@ def test_transcript_resets_on_new_utterance(root):
     _pump(root, 0.3)
     ov.listening()  # a fresh utterance starting
     assert ov._user_text == ""
+
+
+def test_repeated_error_reschedules_dismiss(root):
+    # A second error() while the first error popup is already settled must still
+    # (re)schedule a dismiss. Regression: it used to cancel the dismiss without
+    # rescheduling -> popup stuck until the ~22s watchdog.
+    c = cfg.Config()
+    c.dismiss_seconds = 0.4
+    ov = Overlay(root, c)
+    ov.error("first error")
+    _pump(root, 0.6)                       # let it settle
+    ov.error("second error")               # arrives while settled + visible
+    assert ov._dismiss_job is not None     # a dismiss MUST be scheduled again
+    _pump(root, 1.3)                        # past dismiss_seconds + slide-out
+    assert ov._shown is False              # dismissed normally, not stuck

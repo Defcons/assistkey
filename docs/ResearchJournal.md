@@ -431,3 +431,69 @@ long session AFTER this fix, revisit with a live thread-name dump (see ToDo).
 
 **Aside:** py-spy 0.4.2 cannot profile Python 3.14 — for future live profiling, either
 a py-spy build with 3.14 support or an in-process `sys._current_frames()` sampler.
+
+---
+
+## 2026-08-27 — Full-code bug audit (after the pump busy-loop scare)
+
+Prompted by "we had such a critical bug, can you audit full code to find more bugs?"
+Method: I read `assist_client.py` (async core) myself; two subagents read `app.py`+
+`wake.py` and `overlay.py`+`config.py`+`dpapi.py`. EVERY finding acted on was verified
+by tracing + an empirical probe (standalone `Overlay` on a `tk.Tk()` / a fake
+ws+audio harness) — no real-app launch, no speculation. Agent findings were
+independently re-verified before fixing.
+
+**Confirmed bugs found & fixed (all verified, 59 tests pass):**
+1. **[HIGH] Wake stuck paused + barge-in dead during a slow TTS fetch.** A sibling of
+   the pump bug (a stuck-state from a subtle interaction). `restart_utterance` arms
+   `request_cancel(suppress_done=True)` optimistically, but on its 5 s `_idle` timeout
+   (old run stuck in `_play`'s uninterruptible 15 s `urlopen`) it never starts a
+   replacement, so the armed suppression swallowed the old run's `("done",)` — the ONLY
+   signal that resumes wake / resets hotkey state → wake paused until restart. Fix:
+   on timeout, un-arm `_suppress_next_done` and return (let the old run resolve
+   normally). Probe: `done` fires on fetch release → wake resumes.
+2. **[MEDIUM] Failed first wake-model download permanently disabled wake for the
+   session.** `wake._ensure_model` set `self._downloaded = True` even when
+   `download_models()` raised → never retried, `Model()` then failed forever. Fix:
+   mark downloaded only on success (retry each 1.5 s pass otherwise).
+3. **[MEDIUM] Repeated `error()` left the popup stuck ~22 s.** ERROR self-schedules its
+   dismiss ONLY from `_finish` (the transition path); a 2nd `error()` on an already-
+   settled popup takes `_enter`'s same-state `_refresh` branch (skips `_finish`), so the
+   just-cancelled dismiss was never replaced → stuck until the watchdog. This is a
+   concrete instance of the "popup lingers" class and it made the watchdog smoking-gun
+   log fire in normal use (e.g. hotkey pressed twice while HA down → two
+   "Reconnecting…" errors). Fix: `error()` now `_touch()`es and unconditionally
+   `_schedule_dismiss()`es. Reproduced then re-verified with `probe_error_dismiss.py`;
+   regression test added.
+4. **[LOW] `_drain` logged a `TclError` on every Quit** (rescheduled `after` on a
+   destroyed root). Fix: `_quitting` flag.
+5. **[LOW] Socket leak on repeated auth failure** — `connect()` published `self.ws`
+   before authenticating. Fix: close on any handshake/auth failure, publish only when
+   authed.
+6. **[LOW] Hotkey callbacks weren't exception-isolated** — an exception would make
+   pynput STOP the listener permanently (dead hotkey, tray alive). Fix: wrapped
+   `_hotkey_down`/`_hotkey_up`.
+7. **[LOW] `SettingsDialog._test` marshalled to a possibly-destroyed window** (close
+   the dialog while the network test runs). Fix: `winfo_exists()` guard.
+
+**Adversarially audited and found CLEAN (with probe evidence) — recorded so we don't
+re-chase them:** the Windows timer-resolution raise/drop (`_hold_timer_res`/
+`_drop_timer_res`: net 0 outstanding `timeBeginPeriod` through a storm — this was a top
+worry given past lag bugs); `_animating` wedge / stuck-visible / stuck-hidden (layered
+backstops all effective); `after`-job leaks / competing timers (every self-rescheduling
+loop is single-chain, slot-tracked, cancel-before-reschedule); hotkey-capture listener +
+global-hotkey suspend/resume balance (exactly 1:1 via `_end_capture`); dpapi.py ctypes
+memory (`_to_blob` buffer stays referenced via `_objects`; `LocalFree` read-before-free;
+2000 GC-stressed round-trips clean); config atomic save (temp+replace correct, no
+in-memory token mutation, no double-encrypt).
+
+**Dismissed as NOT bugs after checking (avoided false alarms):** a half-open-TCP hang in
+the utterance teardown (the trailing frame is 1 byte — won't block); cross-thread config
+reads (atomic under the GIL); dpapi missing argtypes (correct on x64 as written).
+
+**Deferred → ToDo:** the uninterruptible/15 s TTS fetch (root of both the barge-in delay
+and popup-linger classes); config type-validation on manual corruption; the DPAPI
+decrypt-fail dead-end; a reconnect floor for a pathological rapid clean-close.
+
+Aside: `py-spy` 0.4.2 cannot profile Python 3.14 ("failed to find python version") — the
+audit was code+probe driven, not live-sampled.

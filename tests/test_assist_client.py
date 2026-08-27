@@ -168,15 +168,21 @@ def test_restart_utterance_cancels_with_suppress_and_waits_before_starting():
     assert order == [("cancel", True), ("start", False)]
 
 
-def test_restart_utterance_gives_up_after_timeout_and_still_tries_to_start():
-    # Safety net: if the old utterance never winds down, don't hang forever.
+def test_restart_utterance_on_timeout_unarms_suppression_and_skips_noop_start():
+    # If the old utterance is stuck (e.g. a slow TTS fetch sd.stop can't interrupt),
+    # restart must NOT fall through to a start_utterance that would silently no-op
+    # while _active is still True, AND must un-arm the suppression it set — otherwise
+    # the old run's ("done",) is swallowed and wake stays paused forever (audit
+    # 2026-08-27). It cancels, un-arms, and returns; the old run resolves normally.
     order = []
     client = AssistClient(cfg.Config(), ui=lambda _c: None)
     client._active = True
-    client._idle.clear()   # deliberately never set
+    client._idle.clear()   # deliberately never set -> the wait times out
 
     def fake_cancel(suppress_done=False):
         order.append(("cancel", suppress_done))
+        if suppress_done:
+            client._suppress_next_done = True   # mirror the real request_cancel
     client.request_cancel = fake_cancel
 
     async def fake_start(notify_unavailable=False):
@@ -192,7 +198,8 @@ def test_restart_utterance_gives_up_after_timeout_and_still_tries_to_start():
         with mock.patch("asyncio.wait_for", fake_wait_for):
             await client.restart_utterance()
     asyncio.run(run_with_faked_timeout())
-    assert order == [("cancel", True), ("start", False)]
+    assert order == [("cancel", True)]           # cancelled, but did NOT no-op-start
+    assert client._suppress_next_done is False   # un-armed so the old run's done fires
 
 
 # ---- pump() must reconnect on close, never busy-spin (2026-08-27) ---------------

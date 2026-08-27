@@ -190,3 +190,11 @@ HA restart/update):**
    but worth reporting).
 4. **Thread count** - if you check, note whether threads stay low or grow over hours
    (see ToDo - unconfirmed secondary observation).
+
+---
+
+## PENDING — Audit fixes: live confirmation (2026-08-27)
+
+Most audit fixes are probe-verified; two benefit from real-app confirmation with a live HA:
+1. **Wake survives a barge-in during a slow reply** — with wake-word ON, trigger a reply that has a slowish TTS fetch, then press the hotkey to barge in during it. Confirm wake-word listening still works afterward (say the wake word → it responds). Before the fix, that sequence left wake paused until restart. (Note the deferred item: the barge-in itself may still take up to ~15 s to visibly take effect during a slow fetch — that's the uninterruptible-fetch item in ToDo, separate from the stuck-wake fix.)
+2. **Two quick errors don't stick the popup** — with HA disconnected, press the hotkey twice within a second (two "Reconnecting…" popups). The popup should slide away after ~2 s (dismiss_seconds), NOT hang ~22 s for the watchdog. `assistkey.log` should NOT show `watchdog force-hiding a stuck error popup` for this.
