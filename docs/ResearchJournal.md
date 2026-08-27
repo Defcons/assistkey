@@ -655,10 +655,15 @@ Two linked bugs:
    90 s watchdog hid the popup, but nothing reset the CLIENT state.
 
 **Fixes (assist_client + overlay):**
-- **Detect a mic that delivered nothing.** `captured_any` flag set in `on_audio`; on release,
-  if still false, emit `__nomic__` → a clear error ("No audio from your microphone — check
-  it's on, plugged in, and not muted…") instead of shipping empty audio and waiting out the
-  timeout. A live mic always streams (even silence), so zero frames == dead device.
+- **Detect a hold that carried no real audio.** First cut checked for ZERO frames, but the
+  user's test corrected the model: a headset that's OFF stays an *active* device delivering
+  *silent* frames (not zero frames), so that missed it and HA came back with "no text
+  recognized" after a few seconds. So the check is now on LEVEL: track the loudest processed
+  sample over the hold (`peak_level`); on release, if it's below `SILENCE_PEAK` (0.005 — a
+  muted/off device is ~0, well under any real speech), emit `__nomic__` → "Didn't hear
+  anything — check your microphone is on and unmuted, then try again", instead of shipping
+  silence to HA and waiting out its STT. Threshold kept deliberately low so a quiet-but-working
+  mic never trips it (false-rejecting real speech would be worse than the slow HA fallback).
 - **Bound the teardown so state ALWAYS resets.** The `finally`'s `await forwarder` is now
   `asyncio.wait({forwarder}, timeout=3)`; if it doesn't wind down, abandon it (cancel, don't
   await) so `_emit_done` + the `_active`/`_idle` reset still run. This is the real cure for the

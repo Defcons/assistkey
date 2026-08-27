@@ -266,17 +266,22 @@ def test_pump_reconnects_on_error_close():
     assert _pump_until_reconnect(_ErrorClosedWS()) == [1]
 
 
-def test_dead_mic_surfaces_error_and_resets_state(monkeypatch):
-    # The reported hang: hold-to-talk with the mic off/unplugged. The stream opens
-    # but never delivers a frame (on_audio never fires), so the app used to ship an
-    # empty utterance and sit in "Thinking…" for the full completion timeout, THEN
-    # wedge _active/_idle so every later hotkey press dead-ended. Now: a zero-frame
-    # capture is detected on release -> a clear error AND a clean state reset.
+def test_silent_mic_surfaces_error_and_resets_state(monkeypatch):
+    # The reported hang: hold-to-talk with the headset OFF. The device stays active and
+    # delivers SILENT frames (not zero frames), so it used to fall through to HA and sit
+    # in "Thinking…" for seconds before HA's "no text recognized" — and the run then hung
+    # in teardown, wedging _active/_idle so every later hotkey press dead-ended. Now a hold
+    # whose loudest sample is essentially silence is caught on release -> a clear error AND
+    # a clean state reset.
     import assist_client as ac
 
-    class FakeStream:                      # opens fine, delivers no audio (dead mic)
-        def __init__(self, *a, **k): pass
-        def start(self): pass
+    class FakeStream:                      # opens fine, delivers digital silence (mic off/muted)
+        def __init__(self, *a, callback=None, **k):
+            self._cb = callback
+        def start(self):
+            if self._cb:
+                for _ in range(3):
+                    self._cb(bytes(ac.BLOCK * 2), ac.BLOCK, None, None)  # BLOCK int16 zeros
         def stop(self): pass
         def close(self): pass
     monkeypatch.setattr(ac.sd, "RawInputStream", FakeStream)

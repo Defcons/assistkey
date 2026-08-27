@@ -40,6 +40,9 @@ log = logging.getLogger("assistkey.client")
 
 SAMPLE_RATE = 16000
 BLOCK = 1600  # 100 ms at 16 kHz
+SILENCE_PEAK = 0.005  # 0..1 loudest-sample floor; a whole hold below it = no real audio
+                      # (mic off / unplugged / muted). Deliberately low: a muted device gives
+                      # ~0, so this catches it without tripping on a quiet-but-working mic.
 COMPLETION_TIMEOUT = 60   # s after release to get run-end before forcing the popup away
 MAX_RECORD = 120          # s hard cap on recording (protects against a missed key-release)
 CONVERSATION_TTL = 60     # s a conversation_id is reused so follow-ups keep context
@@ -426,19 +429,22 @@ class AssistClient:
         finished = asyncio.Event()
 
         dsp = _MicDSP(self.config.mic_gain_db, self.config.mic_highpass)
-        captured_any = False  # did the mic deliver ANY audio? a dead/off/held device delivers none
+        peak_level = 0.0  # loudest processed sample over the hold (0..1); ~0 = mic off/muted/too quiet
 
         def on_audio(indata, frames, t, status):
-            nonlocal captured_any
-            captured_any = True
+            nonlocal peak_level
             arr = np.frombuffer(bytes(indata), dtype=np.int16)
             if dsp.active:
                 arr = dsp.process(arr)   # boost / high-pass BEFORE streaming to HA
             audio_q.put(arr.tobytes())
             # Emit a mic level (0..1 peak) for the Listening meter — on the PROCESSED
             # signal, so the bar reflects what HA receives (dial the boost by it). ~10/s.
+            # Also track the loudest sample of the whole hold, to catch a silent mic.
             if arr.size:
-                self.ui(("level", float(np.abs(arr).max()) / 32768.0))
+                lvl = float(np.abs(arr).max()) / 32768.0
+                if lvl > peak_level:
+                    peak_level = lvl
+                self.ui(("level", lvl))
 
         try:
             stream = sd.RawInputStream(
@@ -480,12 +486,12 @@ class AssistClient:
             await self._release.wait()
             self.ui(("thinking",))  # key released -> Listening popup out, Thinking popup in
             stop_capture.set()
-            if not captured_any:
-                # The mic streamed ZERO frames the whole time it was held — the device is
-                # off / unplugged / muted at the driver / held exclusively by another app
-                # (a live mic always delivers blocks, even of silence). Don't ship an empty
-                # utterance to HA and sit in "Thinking…" until the completion timeout — say
-                # so now.
+            if peak_level < SILENCE_PEAK:
+                # The mic delivered (near-)silence the WHOLE hold — off / unplugged / muted,
+                # or the user far too quiet for STT to stand a chance. Catch it here instead
+                # of shipping silence to HA and waiting several seconds for it to come back
+                # with "no text recognized". (A dead device that never fires the callback
+                # leaves peak_level at 0, so this covers that too.)
                 await events.put({"type": "__nomic__"})
 
         async def forward_audio():
@@ -551,8 +557,8 @@ class AssistClient:
             while True:
                 msg = await events.get()
                 if msg.get("type") == "__nomic__":
-                    self.ui(("error", "No audio from your microphone — check it's on, "
-                                      "plugged in, and not muted, then try again."))
+                    self.ui(("error", "Didn't hear anything — check your microphone is on "
+                                      "and unmuted, then try again."))
                     break
                 if msg.get("type") == "__timeout__":
                     self.ui(("error", "No response — timed out"))

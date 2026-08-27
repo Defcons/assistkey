@@ -10,7 +10,7 @@ _Last updated: 2026-08-27 (dead-mic hang fix; repo now public)_
 
 ### A0. Dead-mic hang + hotkey recovery ⭐ (fix 2026-08-27)
 The reported bug: hold-to-talk with the headset/mic OFF → popup stuck in "Thinking…", then the hotkey does nothing on later presses. Machine-verified via an integration test (fake no-audio stream): the utterance returns promptly, emits the mic error, resets `_active`/`_idle`. Confirm live:
-- **Turn your mic off / unplug the headset**, then hold-to-talk and release → a popup **"No audio from your microphone — check it's on, plugged in, and not muted…"** appears within a moment (NOT a ~60 s "Thinking…" hang).
+- **Turn your mic off / unplug the headset**, then hold-to-talk and release → a popup **"Didn't hear anything — check your microphone is on and unmuted…"** appears fast (NOT a "Thinking…" hang, and NOT a several-second wait for HA's "no text recognized"). Detection is by signal level (a muted device streams silence, not zero frames), so it also covers a muted mic.
 - **Immediately press the hotkey again** → Listening appears normally (the hotkey is NOT dead). Turn the mic back on → a normal utterance works.
 - **✕ button:** during any Listening/Thinking/Response popup, click the **✕** (top-right) → the popup aborts and the hotkey still works on the next press. (Clicking anywhere on the popup does the same.)
 - `assistkey.log` shows no repeating `restart_utterance: previous utterance stuck` lines afterward.
