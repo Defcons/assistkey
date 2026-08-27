@@ -11,6 +11,8 @@ import os
 import sys
 from pathlib import Path
 
+import paths
+
 try:
     import winreg
 except ImportError:  # noqa: BLE001 - non-Windows: autostart is a no-op
@@ -21,8 +23,11 @@ _APP_NAME = "AssistKey"
 
 
 def _launch_command() -> str:
-    """`wscript AssistKey.vbs` — silent tray launch, quoted for the registry."""
-    vbs = Path(__file__).with_name("AssistKey.vbs")
+    """Registry launch command, quoted. Frozen build: the windowed exe itself (no
+    console, so no VBS wrapper needed). Source run: the silent `wscript AssistKey.vbs`."""
+    if getattr(sys, "frozen", False):
+        return f'"{Path(sys.executable).resolve()}"'
+    vbs = paths.app_dir() / "AssistKey.vbs"
     windir = os.environ.get("WINDIR", r"C:\Windows")
     wscript = Path(windir) / "System32" / "wscript.exe"
     return f'"{wscript}" "{vbs}"'

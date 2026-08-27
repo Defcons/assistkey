@@ -14,15 +14,14 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
-
 from pynput import keyboard as kb
 
 import dpapi
+import paths
 
 log = logging.getLogger("assistkey.config")
 
-CONFIG_PATH = Path(__file__).with_name("config.json")
+CONFIG_PATH = paths.app_dir() / "config.json"
 
 # Normalise left/right modifier variants to one canonical token so a combo
 # matches whichever physical key is pressed.

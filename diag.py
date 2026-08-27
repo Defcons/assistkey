@@ -21,7 +21,9 @@ import threading
 import urllib.parse
 from pathlib import Path
 
-LOG_PATH = Path(__file__).with_name("assistkey.log")
+import paths
+
+LOG_PATH = paths.app_dir() / "assistkey.log"
 log = logging.getLogger("assistkey")
 
 REPO_URL = "https://github.com/Defcons/assistkey"

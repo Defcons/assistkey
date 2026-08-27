@@ -602,3 +602,31 @@ Caveat recorded for later: GitHub can still serve the old pre-force-push commits
 while (until its own gc); a personal repo with no forks/PRs leaves them unreferenced and they
 age out. Contact GitHub Support only if prompt purge is needed. Optional follow-up: rename the
 default branch `master` → `main`.
+
+---
+
+## 2026-08-27 — Downloadable .exe release: three frozen-build path bugs fixed first
+
+To make the app trivial to try (no Python/venv), built the PyInstaller one-file exe for a
+GitHub Release. Building surfaced a class of bug that only bites the frozen build: three user
+files resolved via `Path(__file__)`, which inside a one-file exe points into the ephemeral
+`_MEIPASS` extraction dir (wiped on exit):
+- `config.CONFIG_PATH` — settings would be written to temp and **lost on every restart**;
+- `diag.LOG_PATH` — the log (and tray → "Open log") would point into temp;
+- `autostart._launch_command` — start-at-login would register a dead `_MEIPASS` path (and it
+  built a `wscript AssistKey.vbs` command, but a downloaded exe has no VBS beside it).
+
+Fix: new `paths.py` with `app_dir()` — the exe's own folder when `sys.frozen`, the source dir
+otherwise. `config`/`diag` route their paths through it; `autostart` registers the exe
+directly when frozen. Source-run behaviour is unchanged (files still sit next to the modules).
+Added `tests/test_paths.py` (source vs frozen `app_dir`, and that config/log hang off it) +
+a frozen `_launch_command` test → **70 pass**.
+
+Verified the exe for real: copied `dist\AssistKey.exe` to a clean folder and ran it — it
+started (no import/data crashes in the frozen bundle), wrote `assistkey.log` **next to the
+exe** (the fix), and connected to the live HA over the env-var credentials, then shut down
+clean with no leftover processes. ~87 MB one-file, windowed (no console), icon embedded;
+openWakeWord models still download on first enable (not bundled). `dist/`+`build/` stay
+git-ignored — the exe ships as a Release asset, not in the repo. Cutting **v1.0.0** with the
+exe attached; README gained a "Download & run — no Python needed" section (incl. the expected
+unsigned-exe SmartScreen "More info → Run anyway" note) and the new `docs/hero.png`.

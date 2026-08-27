@@ -17,7 +17,7 @@ is spoken aloud.
 > WebSocket API over your network, so it works with HA OS, Container, Supervised,
 > or Core.
 
-![A reply popup](docs/popup.png)
+![AssistKey — hold a hotkey, talk to Home Assistant, hear the reply](docs/hero.png)
 
 ## Features
 
@@ -48,7 +48,27 @@ is spoken aloud.
 - **Robust** — the popup is guaranteed to dismiss and the app self-recovers even
   if the connection drops or a pipeline stalls (watchdogs + a hard-hide backstop).
 
+## Download & run — no Python needed
+
+**The easy way:** download **`AssistKey.exe`** from the
+[latest release](https://github.com/Defcons/assistkey/releases/latest) and run it.
+One self-contained file — no Python, no `pip`, no install.
+
+1. Download `AssistKey.exe` from the release page.
+2. Put it in a folder you can write to — e.g. a new `AssistKey` folder in your user
+   directory (**not** `Program Files`). Your `config.json` and log live next to it.
+3. Double-click it. A tray icon appears and **Settings** opens on first run — enter
+   your Home Assistant URL + token (see [Run](#run) below), and you're set.
+
+> **Heads-up — Windows SmartScreen:** the exe isn't code-signed, so Windows may say
+> *"Windows protected your PC."* Click **More info → Run anyway**. PyInstaller apps are
+> occasionally false-flagged by antivirus too — the full source is in this repo if you'd
+> rather build it yourself (see [Build a standalone .exe](#build-a-standalone-exe)).
+
 ## Requirements
+
+_For running from source or building the exe yourself — skip this and the next two
+sections if you just downloaded the exe above._
 
 - Windows 10 or 11
 - Python 3.12+ (with tkinter — the standard python.org installer includes it)
