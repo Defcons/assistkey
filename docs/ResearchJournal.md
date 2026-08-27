@@ -497,3 +497,25 @@ decrypt-fail dead-end; a reconnect floor for a pathological rapid clean-close.
 
 Aside: `py-spy` 0.4.2 cannot profile Python 3.14 ("failed to find python version") — the
 audit was code+probe driven, not live-sampled.
+
+---
+
+## 2026-08-27 — TTS fetch made interruptible (closes the barge-in-delay + popup-linger root)
+
+The audit deferred this as the shared root of two symptom classes: `_play`'s TTS
+fetch (`urlopen(timeout=15)`) ran in an executor, and `sd.stop()` only unblocks the
+PLAYBACK (`sd.wait`), not the fetch — so a barge-in during a slow fetch left the
+utterance loop stuck at `await self._play` for up to the whole timeout (unresponsive
+barge-in; and the reply popup lingered while the fetch dragged).
+
+Fix: `_play` now races the fetch/playback executor future against `self._cancel`
+(`asyncio.wait(..., FIRST_COMPLETED)`). On a barge-in it returns immediately; the
+executor thread finishes its (now 10 s-capped) fetch in the background, sees
+`cancel.is_set()`, and skips playback — a short-lived orphan retired via a done-
+callback so asyncio doesn't warn about an un-retrieved exception. Timeout dropped
+15→10 s.
+
+Verified: probe — barge-in during a blocked fetch returns `_play` in **15 ms** (was
+up to the full timeout); a second probe confirmed the NORMAL fetch→decode→play→done
+path is intact; unit test `test_play_returns_promptly_on_barge_in_during_fetch` runs
+clean under `-W error::RuntimeWarning` (no orphan-thread warning). 60 tests pass.

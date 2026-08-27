@@ -43,6 +43,7 @@ BLOCK = 1600  # 100 ms at 16 kHz
 COMPLETION_TIMEOUT = 60   # s after release to get run-end before forcing the popup away
 MAX_RECORD = 120          # s hard cap on recording (protects against a missed key-release)
 CONVERSATION_TTL = 60     # s a conversation_id is reused so follow-ups keep context
+TTS_FETCH_TIMEOUT = 10    # s cap on fetching a TTS clip (a barge-in also unblocks _play early)
 
 
 def _ws_url(server: str) -> str:
@@ -566,20 +567,49 @@ class AssistClient:
     async def _play(self, tts_output: dict):
         url = tts_output["url"]
         full = url if url.startswith("http") else self.server + url
+        cancel = self._cancel   # this utterance's barge-in event
 
         def fetch_decode_play():
             req = urllib.request.Request(full, headers={"Authorization": f"Bearer {self.token}"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=TTS_FETCH_TIMEOUT) as resp:
                 data = resp.read()
+            if cancel.is_set():
+                return  # barged in during the fetch — don't start playback at all
             decoded = miniaudio.decode(data, output_format=miniaudio.SampleFormat.SIGNED16)
             samples = np.frombuffer(decoded.samples, dtype=np.int16)
             if decoded.nchannels > 1:
                 samples = samples.reshape(-1, decoded.nchannels)
             sd.play(samples, decoded.sample_rate, device=self.config.speaker_device)
-            sd.wait()
+            sd.wait()  # request_cancel()'s sd.stop() interrupts this
 
+        # Race the fetch/playback against a barge-in. `sd.stop()` only unblocks the
+        # PLAYBACK (`sd.wait`), not the `urlopen` fetch — so without this, a barge-in
+        # during a slow fetch left the utterance loop stuck at `await self._play` for
+        # up to the whole timeout (unresponsive barge-in + lingering popup). Now a
+        # barge-in returns _play immediately; the executor finishes its soon-to-time-
+        # out fetch in the background, sees `cancel.is_set()`, and skips playback — a
+        # short-lived, harmless orphan.
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(None, fetch_decode_play)
+        waiter = asyncio.ensure_future(cancel.wait())
         try:
-            await asyncio.get_running_loop().run_in_executor(None, fetch_decode_play)
+            await asyncio.wait({fut, waiter}, return_when=asyncio.FIRST_COMPLETED)
+            if fut.done():
+                await fut  # completed on its own — surface any fetch/decode/play error
+            else:
+                log.info("tts playback cancelled during fetch")
+                fut.add_done_callback(self._retire_orphan_play)
         except Exception as exc:  # noqa: BLE001 - playback failure shouldn't abort the run
             log.warning("playback failed: %s", exc)
             self.ui(("status", f"Playback error: {exc}"))
+        finally:
+            waiter.cancel()
+
+    @staticmethod
+    def _retire_orphan_play(fut):
+        # The utterance already moved on (barge-in during the fetch). Retrieve any
+        # error so asyncio doesn't warn about an un-retrieved exception.
+        if not fut.cancelled():
+            exc = fut.exception()
+            if exc:
+                log.info("orphaned tts fetch ended: %s", exc.__class__.__name__)

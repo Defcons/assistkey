@@ -264,3 +264,43 @@ def test_pump_reconnects_on_clean_close_instead_of_spinning():
 def test_pump_reconnects_on_error_close():
     # The pre-existing error-close path must still reconnect (unchanged behaviour).
     assert _pump_until_reconnect(_ErrorClosedWS()) == [1]
+
+
+def test_play_returns_promptly_on_barge_in_during_fetch(monkeypatch):
+    # The TTS fetch used to be uninterruptible (urlopen in an executor), so a
+    # barge-in during a slow fetch left the utterance stuck at `await self._play`
+    # for up to the whole timeout. Now a barge-in returns _play immediately; the
+    # fetch finishes in the background and skips playback.
+    import threading
+    import assist_client as ac
+
+    gate = threading.Event()
+
+    class FakeResp:
+        def read(self): return b"x"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(ac.urllib.request, "urlopen",
+                        lambda req, timeout=None: (gate.wait(), FakeResp())[1])
+    monkeypatch.setattr(ac.sd, "stop", lambda: None)
+
+    client = AssistClient(cfg.Config(), ui=lambda _c: None)
+    client.server, client.token = "http://x", "t"
+
+    async def run():
+        client.loop = asyncio.get_running_loop()
+        client._cancel = asyncio.Event()
+        play = asyncio.ensure_future(client._play({"url": "http://x/t.mp3"}))
+        await asyncio.sleep(0.1)              # _play now blocked in the (fake) fetch
+        assert not play.done()
+        t0 = asyncio.get_running_loop().time()
+        client.request_cancel()              # barge-in DURING the fetch
+        await asyncio.wait_for(play, timeout=1.0)   # must return without waiting on the fetch
+        dt = asyncio.get_running_loop().time() - t0
+        gate.set()                           # release the orphan fetch before the loop closes
+        await asyncio.sleep(0.05)
+        return dt
+
+    dt = asyncio.run(run())
+    assert dt < 0.5, f"_play took {dt:.2f}s to return on barge-in (should be near-instant)"
