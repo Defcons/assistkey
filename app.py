@@ -375,6 +375,10 @@ class App:
                 log.exception("could not open issue-report draft")
         elif name == "quit":
             self._quit()
+        else:
+            # The tuple protocol's worst property is that a typo'd or half-wired
+            # event vanishes without a trace — make it a logged one instead.
+            log.warning("unknown ui command %r", cmd)
 
     def _on_settings_saved(self):
         self.hotkey.reset()

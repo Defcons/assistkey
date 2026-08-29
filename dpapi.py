@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import logging
 from ctypes import wintypes
+
+log = logging.getLogger("assistkey.dpapi")
 
 PREFIX = "dpapi:"
 
@@ -43,6 +46,7 @@ def protect(secret: str) -> str:
         ok = ctypes.windll.crypt32.CryptProtectData(
             ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out))
         if not ok:
+            log.warning("DPAPI encrypt failed; token stored in PLAINTEXT")
             return secret
         try:
             enc = _from_blob(blob_out)
@@ -50,6 +54,7 @@ def protect(secret: str) -> str:
             ctypes.windll.kernel32.LocalFree(blob_out.pbData)
         return PREFIX + base64.b64encode(enc).decode("ascii")
     except Exception:  # noqa: BLE001 - non-Windows / missing API: keep plaintext
+        log.warning("DPAPI unavailable; token stored in PLAINTEXT")
         return secret
 
 
@@ -64,6 +69,7 @@ def unprotect(stored: str) -> str:
         ok = ctypes.windll.crypt32.CryptUnprotectData(
             ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out))
         if not ok:
+            log.warning("DPAPI decrypt failed (config copied from another Windows account?)")
             return stored
         try:
             dec = _from_blob(blob_out)
@@ -71,4 +77,5 @@ def unprotect(stored: str) -> str:
             ctypes.windll.kernel32.LocalFree(blob_out.pbData)
         return dec.decode("utf-8")
     except Exception:  # noqa: BLE001 - can't decrypt (e.g. copied from another account): leave as-is
+        log.warning("DPAPI decrypt failed; leaving stored value as-is")
         return stored

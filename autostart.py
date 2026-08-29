@@ -7,11 +7,14 @@ window — the same thing double-clicking AssistKey.vbs does.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
 
 import paths
+
+log = logging.getLogger("assistkey.autostart")
 
 try:
     import winreg
@@ -60,4 +63,6 @@ def set_enabled(enabled: bool) -> None:
                 except FileNotFoundError:
                     pass  # already absent
     except OSError:
-        pass
+        # Still best-effort (Save must not fail over this), but no longer silent:
+        # the user ticked a box that then did nothing — leave a trace.
+        log.exception("could not update the start-at-login registry entry")

@@ -10,6 +10,7 @@ token is written here, config.json is sensitive and git-ignored.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -101,23 +102,12 @@ class Config:
         return cls()
 
     def save(self) -> None:
-        data = {
-            "ha_url": self.ha_url,
-            "ha_token": dpapi.protect(self.ha_token),  # encrypted at rest (DPAPI, per-user)
-            "hotkey": self.hotkey,
-            "trigger_mode": self.trigger_mode,
-            "wake_enabled": self.wake_enabled,
-            "wake_word": self.wake_word,
-            "wake_sensitivity": self.wake_sensitivity,
-            "mic_device": self.mic_device,
-            "mic_gain_db": self.mic_gain_db,
-            "mic_highpass": self.mic_highpass,
-            "speaker_device": self.speaker_device,
-            "pipeline": self.pipeline,
-            "dismiss_seconds": self.dismiss_seconds,
-            "popup_monitor": self.popup_monitor,
-            "follow_up_enabled": self.follow_up_enabled,
-        }
+        # asdict, not a hand-written mirror of the field list: forgetting to add a
+        # new field here failed SILENTLY (it constructed, showed in Settings, and
+        # just never persisted). Every dataclass field round-trips automatically;
+        # only the token needs special handling (encrypted at rest).
+        data = dataclasses.asdict(self)
+        data["ha_token"] = dpapi.protect(self.ha_token)  # encrypted at rest (DPAPI, per-user)
         # Atomic write: a truncating write interrupted mid-flight (this app
         # force-kills older instances at startup) would corrupt config.json and
         # lose the token. Write a temp file, then rename over the target.

@@ -5,9 +5,12 @@ capture mic audio while the hotkey is held, stream it into assist_pipeline,
 surface pipeline events to the UI via a callback, and play the TTS reply on the
 configured output device.
 
-UI-agnostic: it calls `self.ui((command, *args))`. The app translates those into
-overlay updates. Commands emitted:
+UI-agnostic: it calls `self.ui((command, *args))` — the callback must be
+thread-safe (the mic level is emitted from the PortAudio callback thread; the
+app's is a queue.put). The app translates commands into overlay/tray updates:
+    ("assistant", name)             pipeline display name for the reply header
     ("listening",)                  mic open, waiting for speech
+    ("level", v)                    mic peak 0..1 for the Listening meter (~10/s)
     ("thinking",)                   key released, STT/LLM running
     ("user_text", text)             final recognised speech
     ("response_reset",)             assistant reply is about to stream
@@ -16,6 +19,14 @@ overlay updates. Commands emitted:
     ("error", message)
     ("done",)                       reply finished (audio played) -> fade out
     ("status", text)                connection status (tray/debug)
+    ("connected",) / ("disconnected",)   tray icon colour
+
+Contract: ("done",) and ("error",) are the TERMINAL signals — they are what
+resumes wake-word listening and resets hotkey state, so every utterance path
+must end in exactly one of them (see the wake-balance landmine in
+OrientationMap). An ("error",) may also precede the ("done",) of the same run
+(a mid-run pipeline error, or a crash caught in _run_utterance); the app's
+handlers are idempotent, so the double reset is harmless.
 
 `restart_utterance()` is the barge-in entry point: it cancels whatever's active
 (suppressing ITS ("done",) so it can't race the new run's ("listening",)) before

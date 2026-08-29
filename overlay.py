@@ -1171,8 +1171,8 @@ class SettingsDialog:
                 if self.win.winfo_exists():
                     self.win.after(0, lambda: self.test_result.configure(
                         text=msg, text_color=(S_OK if ok else S_ERR)))
-            except tk.TclError:
-                pass
+            except (tk.TclError, RuntimeError):
+                pass  # RuntimeError: Tk torn down entirely (app quit mid-test)
 
         threading.Thread(target=worker, daemon=True).start()
 

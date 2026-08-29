@@ -81,22 +81,25 @@ class _StreamToLogger:
     def __init__(self, level: int):
         self._level = level
         self._buf = ""
+        self._lock = threading.Lock()   # any thread may print; keep lines whole
 
     def write(self, msg):
         try:
-            self._buf += msg
-            while "\n" in self._buf:
-                line, self._buf = self._buf.split("\n", 1)
-                if line.strip():
-                    log.log(self._level, line.rstrip())
+            with self._lock:
+                self._buf += msg
+                while "\n" in self._buf:
+                    line, self._buf = self._buf.split("\n", 1)
+                    if line.strip():
+                        log.log(self._level, line.rstrip())
         except Exception:  # noqa: BLE001 - logging must never raise back into the caller
             pass
 
     def flush(self):
         try:
-            if self._buf.strip():
-                log.log(self._level, self._buf.rstrip())
-            self._buf = ""
+            with self._lock:
+                if self._buf.strip():
+                    log.log(self._level, self._buf.rstrip())
+                self._buf = ""
         except Exception:  # noqa: BLE001
             pass
 
@@ -166,17 +169,18 @@ def _tail(path: Path, chars: int = TAIL_CHARS) -> str:
     return text[-chars:] if len(text) > chars else text
 
 
-def find_error_excerpt(paths, max_chars: int = MAX_EXCERPT_CHARS) -> str:
+def find_error_excerpt(candidates, max_chars: int = MAX_EXCERPT_CHARS) -> str:
     """The most recent ERROR/CRITICAL log record (+ any traceback under it) found
-    across `paths`, checked newest-file-first. A record's traceback lines have no
-    timestamp, so a block runs until the next timestamped line or EOF.
+    across `candidates`, checked newest-file-first. A record's traceback lines
+    have no timestamp, so a block runs until the next timestamped line or EOF.
 
     Falls back to the tail of the first non-empty log if nothing reached
     ERROR/CRITICAL — routine WARNING noise (a reconnect retry, say) is skipped in
     favour of a real crash whenever one exists. Returned text is NOT yet redacted
     — callers must pass it through `_redact` before it leaves the machine.
+    (Param renamed from `paths`: it shadowed the `paths` module.)
     """
-    for path in paths:
+    for path in candidates:
         try:
             if not path.exists() or path.stat().st_size == 0:
                 continue
@@ -190,7 +194,7 @@ def find_error_excerpt(paths, max_chars: int = MAX_EXCERPT_CHARS) -> str:
         while end < len(lines) and not _TS_RE.match(lines[end]):
             end += 1
         return _clip("\n".join(lines[start:end]), max_chars)
-    for path in paths:
+    for path in candidates:
         if path.exists() and path.stat().st_size > 0:
             return _clip(_tail(path), max_chars)
     return ""

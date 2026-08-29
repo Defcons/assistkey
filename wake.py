@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
@@ -41,6 +42,7 @@ class WakeListener:
         self._model = None
         self._loaded_word = None
         self._downloaded = False
+        self._purged_cache = False   # one self-heal purge per session, max
 
     # ---- lifecycle ----------------------------------------------------------
 
@@ -50,9 +52,6 @@ class WakeListener:
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-
-    def stop(self):
-        self._running = False
 
     def pause(self):
         self._paused.set()
@@ -86,8 +85,33 @@ class WakeListener:
             # forever (no model files), permanently disabling wake for the session.
             download_models()  # idempotent; fetches the ~10 MB model set once
             self._downloaded = True
-        self._model = Model(wakeword_models=[word], inference_framework="onnx")
+        try:
+            self._model = Model(wakeword_models=[word], inference_framework="onnx")
+        except Exception:
+            # A crash/power-loss during the FIRST download leaves a truncated
+            # .onnx that passes download_models' exists-check forever — bricking
+            # wake across sessions until someone deletes the file by hand
+            # (openwakeword streams straight to the final filename, no
+            # temp+rename). Self-heal: purge the cache once and re-download on
+            # the next retry pass. A non-file load failure purges/refetches at
+            # most once, then just keeps raising into _run's logged retry.
+            if not self._purged_cache:
+                self._purged_cache = True
+                self._downloaded = False
+                self._purge_model_cache()
+            raise
         self._loaded_word = word
+
+    @staticmethod
+    def _purge_model_cache():
+        try:
+            import openwakeword
+            models = Path(openwakeword.__file__).parent / "resources" / "models"
+            for f in models.glob("*.onnx"):
+                f.unlink(missing_ok=True)
+            log.warning("purged the openwakeword model cache; re-downloading next pass")
+        except Exception:  # noqa: BLE001 - best-effort; _run logs the load error anyway
+            log.exception("could not purge the wake-model cache")
 
     def _listen_once(self):
         """Open the mic and listen until a detection, a pause, or disable."""
