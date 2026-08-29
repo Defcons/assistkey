@@ -181,6 +181,7 @@ class AssistClient:
         self._idle.set()                        # nothing running yet
         self._release = asyncio.Event()
         self._cancel = asyncio.Event()          # barge-in: abort the current run
+        self._retry_kick = asyncio.Event()      # cut _reconnect's backoff short (new creds saved)
         self._suppress_next_done = False        # see restart_utterance
         self.pipelines: list[dict] = []
         self.preferred_pipeline: str | None = None
@@ -202,6 +203,7 @@ class AssistClient:
         url = url.rstrip("/")
         if _ws_is_open(self.ws) and url == self.server and token == self.token:
             return  # nothing connection-relevant changed; keep the live socket
+        self._retry_kick.set()  # if _reconnect is mid-backoff, retry with the new creds NOW
         if self.ws is not None:
             try:
                 await self.ws.close()
@@ -259,6 +261,14 @@ class AssistClient:
             msg = json.loads(raw)
             if msg.get("id") == msg_id:
                 return msg
+            # Not ours — but maybe an in-flight utterance's. Right after a
+            # reconnect the socket is OPEN (a hotkey press can start a run) while
+            # pump is still parked in _reconnect running THIS method; discarding
+            # here would eat that run's events and dead-end it into the 60 s
+            # watchdog.
+            q = self._routes.get(msg.get("id"))
+            if q is not None:
+                q.put_nowait(msg)
         raise RuntimeError("connection closed awaiting reply")
 
     async def load_pipelines(self):
@@ -300,6 +310,12 @@ class AssistClient:
             log.warning("connection %s; reconnecting", reason)
             self.ui(("disconnected",))
             self.ui(("status", f"Disconnected ({reason}); reconnecting…"))
+            # Fail any in-flight utterance NOW. HA lost its runs with the socket, so
+            # no more events will ever arrive for these ids — without this, a run
+            # caught mid-flight sits silently in "Thinking…" until the 60 s
+            # completion watchdog, with wake paused the whole time.
+            for q in list(self._routes.values()):
+                q.put_nowait({"type": "__disconnected__"})
             await self._reconnect()   # awaits (connect + backoff sleep) -> never spins
 
     async def _reconnect(self):
@@ -311,7 +327,14 @@ class AssistClient:
                 return
             except Exception as exc:  # noqa: BLE001 - keep retrying with backoff
                 log.warning("reconnect failed (%s); retrying in %ds", exc.__class__.__name__, delay)
-                await asyncio.sleep(delay)
+                # Interruptible backoff: a Settings save with corrected credentials
+                # kicks this (force_reconnect) so the user isn't stuck watching
+                # "Disconnected" for up to 30 s after fixing a typo'd URL.
+                self._retry_kick.clear()
+                try:
+                    await asyncio.wait_for(self._retry_kick.wait(), delay)
+                except asyncio.TimeoutError:
+                    pass
                 delay = min(delay * 2, 30)
 
     # ---- utterance ----------------------------------------------------------
@@ -475,7 +498,22 @@ class AssistClient:
             run_opts["pipeline"] = self.config.pipeline
         if self._conversation_id and time.monotonic() < self._conv_deadline:
             run_opts["conversation_id"] = self._conversation_id  # continue the same chat
-        await self.ws.send(json.dumps(run_opts))
+        try:
+            await self.ws.send(json.dumps(run_opts))
+        except Exception:
+            # The socket can die between start_utterance's open-check and here (this
+            # send is the first await after that check, and a send on a dying
+            # connection raises). Nothing owns the stream yet — forward_audio
+            # doesn't exist — so without this cleanup the mic stays HOT forever
+            # (still capturing) and the routes entry leaks. Probe-confirmed
+            # 2026-08-29. The re-raise surfaces as a normal ("error",) terminal
+            # via start_utterance's backstop, so hotkey/wake state still resets.
+            try:
+                stream.stop(); stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._routes.pop(msg_id, None)
+            raise
 
         handler_id: int | None = None
         buffered: list[bytes] = []
@@ -560,6 +598,12 @@ class AssistClient:
                     self.ui(("error", "Didn't hear anything — check your microphone is on "
                                       "and unmuted, then try again."))
                     break
+                if msg.get("type") == "__disconnected__":
+                    # pump lost the socket: HA lost this run with it — no more
+                    # events will ever arrive for our msg_id. Fail fast instead of
+                    # sitting in "Thinking…" until the completion watchdog.
+                    self.ui(("error", "Lost connection to Home Assistant"))
+                    break
                 if msg.get("type") == "__timeout__":
                     self.ui(("error", "No response — timed out"))
                     break
@@ -617,6 +661,18 @@ class AssistClient:
                 elif etype == "run-end":
                     log.info("run-end received")
                     break
+        except Exception as exc:  # noqa: BLE001 - a raiser mid-run (e.g. an unexpected
+            # HA event shape) must resolve with the terminal signals in the RIGHT
+            # order and respect barge-in suppression. Handling it here (instead of
+            # letting start_utterance catch it after the finally) means the
+            # ("error",) precedes the finally's ("done",) — and a run that was
+            # cancelled/superseded stays silent, so a late crash from the OLD run
+            # can't reset hotkey/wake state mid-gesture under the NEW run (the
+            # same race class the done-channel suppression already closed).
+            log.exception("utterance failed")
+            self._follow_up_requested = False   # a crashed run must not auto-listen
+            if not self._cancel.is_set():
+                self.ui(("error", str(exc)))
         finally:
             finished.set()
             stop_capture.set()
@@ -653,8 +709,26 @@ class AssistClient:
             samples = np.frombuffer(decoded.samples, dtype=np.int16)
             if decoded.nchannels > 1:
                 samples = samples.reshape(-1, decoded.nchannels)
+            if cancel.is_set():
+                return  # barged in during the decode — same
             sd.play(samples, decoded.sample_rate, device=self.config.speaker_device)
-            sd.wait()  # request_cancel()'s sd.stop() interrupts this
+            # NOT a blind sd.wait(): request_cancel()'s sd.stop() can land in the
+            # decode window ABOVE — i.e. before this play even starts — and its
+            # cancel flag is set via call_soon_threadsafe, so it can trail the
+            # pre-play check too. A bare wait() would then play the whole stale
+            # reply over the user's new Listening. Poll the flag alongside the
+            # stream instead; audio still halts instantly on a barge-in (sd.stop
+            # from request_cancel), this loop just notices within ~50 ms.
+            while True:
+                if cancel.is_set():
+                    sd.stop()
+                    return
+                try:
+                    if not sd.get_stream().active:
+                        return  # played to the end
+                except RuntimeError:
+                    return      # stream already closed/stopped
+                time.sleep(0.05)
 
         # Race the fetch/playback against a barge-in. `sd.stop()` only unblocks the
         # PLAYBACK (`sd.wait`), not the `urlopen` fetch — so without this, a barge-in

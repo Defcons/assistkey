@@ -232,7 +232,18 @@ class App:
                 except Exception as exc:  # noqa: BLE001 - retry until HA is reachable
                     self.ui_queue.put(("status", f"Connect failed: {exc}; retrying…"))
                     await asyncio.sleep(3)
-            await self.client.pump()
+            # Supervise pump(): it guards the expected close/parse errors itself,
+            # but if anything else ever escapes it, letting it kill this loop
+            # thread makes a silent zombie — tray alive, hotkey dead, wake stuck
+            # paused on its next trigger. Recover instead, like everything else.
+            while True:
+                try:
+                    await self.client.pump()
+                except Exception:  # noqa: BLE001 - the loop thread must never die
+                    log.exception("pump crashed; recovering")
+                    self.ui_queue.put(("disconnected",))
+                    self.ui_queue.put(("status", "Connection error; recovering…"))
+                    await asyncio.sleep(3)
 
         self.loop.run_until_complete(bootstrap())
 
@@ -378,6 +389,14 @@ class App:
     def _quit(self):
         log.info("quit requested")
         self._quitting = True   # stop _drain rescheduling after root is destroyed (avoids a TclError)
+        try:
+            # Stop any in-flight run FIRST — especially TTS playback. Without this,
+            # the interpreter's exit joins the executor thread that's inside the
+            # playback, so the app keeps talking to the end of the clip AFTER the
+            # tray icon (and its Stop menu) are gone.
+            self.client.request_cancel()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self.icon.stop()
         except Exception:  # noqa: BLE001

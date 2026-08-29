@@ -681,3 +681,57 @@ for the first token; the dead-mic fail-fast + the manual ✕ handle the common c
 **Human-confirmed 2026-08-27:** with the headset off, the "Didn't hear anything…" popup now
 appears fast (no "Thinking…" hang, no wait for HA's "no text recognized"), and the hotkey stays
 responsive afterwards. Shipped in **v1.0.1**.
+
+---
+
+## 2026-08-29 — Structural audit (2 agents + own full read): 8 behavior fixes land
+
+Asked-for: "a proper code audit — can the structure be more proper and stable?" Ran two
+independent reviewers (structure/design lens; concurrency/lifecycle lens, findings verified
+against library source) plus a full own read of every module. Convergent verdict: **no
+structural rot** — the threading model, defensive layering and doc set were rated genuinely
+good; the real yield was a batch of small correctness holes, all fixed + regression-tested
+in this commit (78 tests, was 71):
+
+1. **Disconnect mid-utterance stranded the run (MEDIUM — most user-felt).** pump() reconnected
+   but never failed live routes; HA loses its runs with the socket, so the utterance sat in
+   "Thinking…" for the full 60 s watchdog, wake paused, then said "timed out" (misleading —
+   trigger is a routine HA restart). pump now fails every live route with `__disconnected__`
+   → immediate "Lost connection to Home Assistant".
+2. **Hot-mic leak on a press-time socket death (probe-confirmed).** The run-send
+   (`ws.send(run_opts)`) is the first await after the open-check and raises if the socket is
+   dying; forward_audio (the only stream closer) doesn't exist yet → mic stayed HOT forever
+   + routes entry leaked. Setup-send now cleans up (stream stop/close, route pop) and
+   re-raises into the normal ("error",) terminal. (One reviewer called this unreachable "no
+   suspension point between check and send" — wrong in one detail: the send IS the suspension
+   point and the raiser; that's why forward_audio guards its own sends.)
+3. **The error channel was un-suppressible + mis-ordered.** _run_utterance had try/finally but
+   no except: an in-run raiser (e.g. an HA-upgrade event-shape change → KeyError) emitted
+   ("done",) from the finally and THEN ("error",) from start_utterance — and during a barge-in
+   restart the old run's error landed under the NEW run, resetting hotkey/wake mid-gesture
+   (the same race class the done-channel suppression closed 2026-08-24). Errors are now
+   handled inside the run: correct error-before-done ordering, silent for cancelled/superseded
+   runs, and a crashed run can't request a follow-up.
+4. **Barge-in during TTS decode could play the stale reply in full.** request_cancel's
+   sd.stop() can land in the decode window (before sd.play exists) and its cancel-flag set is
+   call_soon_threadsafe'd (can trail the pre-play check) → a blind sd.wait() then played the
+   whole old clip over the new Listening. _play now re-checks cancel pre-play and polls the
+   flag alongside the stream (~50 ms) instead of a blind wait. Audio still halts instantly.
+5. **_request_once discarded in-flight frames.** Post-reconnect, load_pipelines reads the
+   socket while a fresh utterance may already be running; its frames were eaten → dead run.
+   Now routed via _routes.
+6. **pump had no supervisor.** Anything unexpected escaping it killed the loop thread
+   silently: tray alive, hotkey dead, wake stuck paused (zombie). bootstrap now restarts pump
+   with a logged "pump crashed; recovering" + 3 s pause.
+7. **Quit mid-reply kept talking.** _quit never cancelled the client; interpreter exit JOINS
+   executor threads, so the clip played to the end with the tray (and Stop) already gone.
+   _quit now calls request_cancel() first.
+8. **Backoff ignored corrected credentials.** Saving a fixed URL waited out the full (≤30 s)
+   reconnect sleep. force_reconnect now kicks an event that _reconnect's wait honours.
+
+Rated NOT-WORTH-IT by all three reviews (recorded in ToDo as designated designs if their bug
+class recurs): _run_utterance decomposition, enum/dataclass event protocol, per-utterance
+generation counters, _Job after-handle wrapper, unifying the two connect-retry loops.
+Explicitly audited CLEAN: suppress_done loop-serialization, wake pause/resume balance on all
+terminal paths, overlay main-thread discipline, GIL-atomic config reads, no-double-connect,
+executor sizing, shutdown daemon-ness.

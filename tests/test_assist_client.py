@@ -310,6 +310,211 @@ def test_silent_mic_surfaces_error_and_resets_state(monkeypatch):
     assert client._idle.is_set()
 
 
+def test_pump_disconnect_fails_inflight_routes():
+    # 2026-08-29 audit: when the socket drops, HA loses the in-flight run with it —
+    # no more events will EVER arrive for that msg_id. pump must fail the live
+    # routes immediately, not leave the utterance in "Thinking…" for the 60 s
+    # completion watchdog (wake paused the whole time).
+    client = AssistClient(cfg.Config(), ui=lambda _c: None)
+    client.ws = _CleanClosedWS()
+    route: asyncio.Queue = asyncio.Queue()
+    client._routes[42] = route
+
+    class _Stop(Exception):
+        pass
+
+    async def fake_reconnect():
+        raise _Stop
+
+    client._reconnect = fake_reconnect
+
+    async def run():
+        try:
+            await asyncio.wait_for(client.pump(), timeout=2.0)
+        except _Stop:
+            pass
+    asyncio.run(run())
+    assert not route.empty() and route.get_nowait() == {"type": "__disconnected__"}
+
+
+class _OpenDyingWS:
+    """Passes the _ws_is_open check, then raises on the first send — the socket
+    dying exactly between start_utterance's open-check and the pipeline-run send."""
+    state = _FakeState("OPEN")
+
+    async def send(self, *a):
+        raise OSError("socket died at press time")
+
+
+class _RecordingStream:
+    """Opens fine, delivers nothing; records whether anyone ever stopped it."""
+    last = None
+
+    def __init__(self, *a, **k):
+        self.stopped = self.closed = False
+        _RecordingStream.last = self
+
+    def start(self):
+        pass
+
+    def stop(self):
+        self.stopped = True
+
+    def close(self):
+        self.closed = True
+
+
+def test_setup_send_failure_closes_stream_and_route(monkeypatch):
+    # 2026-08-29 audit (probe-confirmed): if the run-send raises, forward_audio —
+    # the only stream closer — was never created. Without explicit cleanup the mic
+    # stayed HOT (still capturing) forever and the routes entry leaked.
+    import assist_client as ac
+    monkeypatch.setattr(ac.sd, "RawInputStream", _RecordingStream)
+    emitted = []
+    client = AssistClient(cfg.Config(), ui=emitted.append)
+    client.ws = _OpenDyingWS()
+    client.active_pipeline_name = lambda: "Assistant"
+
+    async def run():
+        client.loop = asyncio.get_running_loop()
+        await client.start_utterance()
+    asyncio.run(run())
+
+    s = _RecordingStream.last
+    assert s.stopped and s.closed, "mic stream must be closed on a setup-send failure"
+    assert client._routes == {}, "routes entry must not leak"
+    assert any(c[0] == "error" for c in emitted)   # terminal signal still fires
+    assert client._active is False and client._idle.is_set()
+
+
+class _OpenQuietWS:
+    """OPEN socket that accepts sends silently (events are injected by the test)."""
+    state = _FakeState("OPEN")
+
+    async def send(self, *a):
+        pass
+
+
+def _run_utterance_with_injected_event(monkeypatch, arrange):
+    """Start a real utterance on a quiet fake socket, then let `arrange(client, q)`
+    inject events into its route queue; return the emitted ui commands."""
+    import assist_client as ac
+    monkeypatch.setattr(ac.sd, "RawInputStream", _RecordingStream)
+    emitted = []
+    client = AssistClient(cfg.Config(), ui=emitted.append)
+    client.ws = _OpenQuietWS()
+    client.active_pipeline_name = lambda: "Assistant"
+
+    async def run():
+        client.loop = asyncio.get_running_loop()
+        task = asyncio.ensure_future(client.start_utterance())
+        await asyncio.sleep(0.05)                     # utterance is at events.get()
+        q = next(iter(client._routes.values()))
+        arrange(client, q)
+        await asyncio.wait_for(task, timeout=5)
+    asyncio.run(run())
+    return emitted, client
+
+
+def test_disconnected_sentinel_fails_run_with_clear_error(monkeypatch):
+    emitted, _ = _run_utterance_with_injected_event(
+        monkeypatch, lambda c, q: q.put_nowait({"type": "__disconnected__"}))
+    assert any(c[0] == "error" and "connection" in c[1].lower() for c in emitted)
+    assert ("done",) in emitted
+
+
+def test_crash_error_is_suppressed_for_cancelled_run(monkeypatch):
+    # 2026-08-29 audit: the error channel used to be un-suppressible — a crashing
+    # OLD run (bad HA event shape) could emit ("error",) after a barge-in already
+    # started the NEW run, resetting hotkey/wake state mid-gesture (the same race
+    # the done-channel suppression closed). A cancelled run must crash silently.
+    def arrange(client, q):
+        client._cancel.set()                                # barge-in already happened
+        q.put_nowait({"type": "event",
+                      "event": {"type": "run-start", "data": {}}})  # KeyError: runner_data
+    emitted, client = _run_utterance_with_injected_event(monkeypatch, arrange)
+    assert not any(c[0] == "error" for c in emitted), emitted
+    assert ("done",) in emitted                             # terminal still fires
+    assert client._follow_up_requested is False
+
+
+def test_crash_error_precedes_done_for_live_run(monkeypatch):
+    # Same crash WITHOUT a cancel: the error must surface, and BEFORE the done
+    # (correct terminal ordering for the app's state resets).
+    emitted, _ = _run_utterance_with_injected_event(
+        monkeypatch, lambda c, q: q.put_nowait(
+            {"type": "event", "event": {"type": "run-start", "data": {}}}))
+    kinds = [c[0] for c in emitted]
+    assert "error" in kinds and ("done",) in emitted
+    assert kinds.index("error") < kinds.index("done")
+
+
+def test_request_once_routes_inflight_frames():
+    # 2026-08-29 audit: right after a reconnect, _request_once (load_pipelines)
+    # reads the socket while a fresh utterance may already be running — frames for
+    # other ids must be routed to them, not silently discarded.
+    import json as _json
+
+    class _FeedWS:
+        state = _FakeState("OPEN")
+
+        def __init__(self, frames):
+            self._frames = list(frames)
+
+        async def send(self, *a):
+            pass
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._frames:
+                raise StopAsyncIteration
+            return self._frames.pop(0)
+
+    client = AssistClient(cfg.Config(), ui=lambda _c: None)
+    route: asyncio.Queue = asyncio.Queue()
+    client._routes[7] = route
+    foreign = {"id": 7, "type": "event", "event": {"type": "run-start"}}
+
+    async def run():
+        client.ws = _FeedWS([_json.dumps(foreign),
+                             _json.dumps({"id": client._next_id + 1, "success": True})])
+        return await client._request_once({"type": "x"})
+    res = asyncio.run(run())
+    assert res.get("success") is True
+    assert route.get_nowait() == foreign
+
+
+def test_reconnect_backoff_interruptible_by_kick():
+    # 2026-08-29 audit: a Settings save with corrected credentials must cut the
+    # backoff sleep short instead of leaving the user staring at "Disconnected"
+    # for up to 30 s after fixing a typo.
+    import time as _time
+    client = AssistClient(cfg.Config(), ui=lambda _c: None)
+    attempts = []
+
+    async def fake_connect():
+        attempts.append(_time.monotonic())
+        if len(attempts) < 2:
+            raise OSError("still down")
+
+    async def fake_load():
+        pass
+    client.connect = fake_connect
+    client.load_pipelines = fake_load
+
+    async def run():
+        task = asyncio.ensure_future(client._reconnect())
+        await asyncio.sleep(0.05)          # first attempt failed; now in its 1 s backoff
+        client._retry_kick.set()           # what force_reconnect does on a creds change
+        await asyncio.wait_for(task, timeout=2)
+    t0 = _time.monotonic()
+    asyncio.run(run())
+    assert len(attempts) == 2
+    assert _time.monotonic() - t0 < 0.6, "kick must cut the 1 s backoff short"
+
+
 def test_play_returns_promptly_on_barge_in_during_fetch(monkeypatch):
     # The TTS fetch used to be uninterruptible (urlopen in an executor), so a
     # barge-in during a slow fetch left the utterance stuck at `await self._play`
