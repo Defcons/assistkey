@@ -171,12 +171,15 @@ build.bat
 | `app.py` | Entry point: tray, hotkey, asyncio loop, single-instance, GUI wiring. |
 | `assist_client.py` | Async HA Assist pipeline client: audio capture, streaming, playback. |
 | `wake.py` | Optional wake-word listener (openWakeWord). |
-| `overlay.py` | The popup overlay (with mic meter + click-to-stop) + the settings dialog. |
+| `overlay.py` | The popup overlay (mic meter, click/✕-to-stop, slide/fade animation). |
+| `settings.py` | The settings dialog. |
+| `winscreen.py` | Monitor work-area + dark-titlebar helpers (ctypes). |
 | `config.py` | `config.json` load/save + credential resolution + hotkey serialization. |
+| `paths.py` | Where user files live (next to the exe when frozen, the source dir otherwise). |
 | `dpapi.py` | Encrypt/decrypt the HA token at rest (Windows DPAPI, per-user). |
 | `autostart.py` | Start-at-login toggle (per-user registry Run key). |
 | `diag.py` | Logging + crash capture (rotating log, all-thread exception hooks). |
-| `tests/` | Automated tests (config, hotkey, overlay, client, dpapi, autostart, diag). |
+| `tests/` | Automated tests (config, hotkey, overlay, client, dpapi, autostart, diag, paths). |
 
 ## Troubleshooting / logs
 

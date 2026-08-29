@@ -520,7 +520,8 @@ class AssistClient:
             # 2026-08-29. The re-raise surfaces as a normal ("error",) terminal
             # via start_utterance's backstop, so hotkey/wake state still resets.
             try:
-                stream.stop(); stream.close()
+                stream.stop()
+                stream.close()
             except Exception:  # noqa: BLE001
                 pass
             self._routes.pop(msg_id, None)
@@ -566,7 +567,8 @@ class AssistClient:
                         break
             finally:
                 try:
-                    stream.stop(); stream.close()
+                    stream.stop()
+                    stream.close()
                 except Exception:  # noqa: BLE001
                     pass
                 try:

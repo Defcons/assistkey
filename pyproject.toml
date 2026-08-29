@@ -1,0 +1,18 @@
+# Tooling config only — AssistKey is an app, not an installable package.
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+# The codebase's actual standard: pyflakes + core pycodestyle correctness, plus
+# BLE (blind-except) — every broad `except Exception` here is deliberate
+# (best-effort UI/teardown paths that must never wedge the app) and carries a
+# `# noqa: BLE001` with a reason. Style rules that fight that idiom (e.g.
+# bandit's try-except-pass) are intentionally not enabled.
+select = ["E4", "E7", "E9", "F", "BLE"]
+
+[tool.pytest.ini_options]
+# Lets `pytest` resolve the flat root-level modules from any cwd.
+pythonpath = ["."]
+testpaths = ["tests"]

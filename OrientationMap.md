@@ -1,6 +1,6 @@
 # OrientationMap — AssistKey
 
-_Last verified: 2026-08-27 — public release prep: scrollable settings, clean-history push, frozen-aware user-file paths (`paths.py`) + downloadable .exe._
+_Last verified: 2026-08-29 — structural audit: 8 behavior fixes, hygiene batch, overlay.py split (settings.py + winscreen.py), pyproject (ruff+pytest config, ruff in CI)._
 
 ## What this is
 A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hotkey → talk → release; always-on-top toast shows Listening → your words → the streaming reply, which is also spoken. Python 3.12+ / tkinter + customtkinter, asyncio HA WebSocket, pynput hotkey, pystray tray. Entry: `app.py` (run via `AssistKey.vbs` silent or `run.bat` with a console).
@@ -19,7 +19,9 @@ A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hot
 ## Subsystem index
 - **App / wiring** — tray (icon reflects connected/active/disconnected; menu Settings/Stop/Open log/Quit), hotkey modes + barge-in, asyncio loop, single-instance, UI queue drain. Entry: `app.py` (`App`, `HotkeyListener`, `kill_previous_instances`). Threads + cross-thread rules: see KnowledgeBase §Architecture.
 - **Diagnostics / logging** — rotating `assistkey.log` with timestamps + all-thread crash capture; token never logged. Entry: `diag.py` (`setup`, `log_config`, `redact_config`, `asyncio_exception_handler`). Details: KnowledgeBase §Architecture.
-- **Overlay + Settings** — the toast popup (Listening/Thinking/Response/Error state machine + slide/fade animation, mic-level meter, click-to-stop) and the settings dialog. Entry: `overlay.py` (`Overlay`, `SettingsDialog`, `_Dropdown`, `_Tooltip`). Animation internals + timing facts: KnowledgeBase §Popup overlay animation.
+- **Overlay (popup)** — the toast popup: Listening/Thinking/Response/Error state machine + slide/fade animation, mic-level meter, click/✕-to-stop. Entry: `overlay.py` (`Overlay`; re-exports `SettingsDialog` for compatibility). Stable, landmine-dense — touch rarely. Animation internals + timing facts: KnowledgeBase §Popup overlay animation.
+- **Settings dialog** — the customtkinter settings UI (grows with every new setting; split from overlay.py 2026-08-29 so settings changes never open the popup's state machine). Entry: `settings.py` (`SettingsDialog`, `_Dropdown`, `_Tooltip`). A new config field touches: `config.py` dataclass field, a `settings.py` widget + `_save` line (persistence is automatic via `asdict`).
+- **Windows screen helpers** — monitor work-areas + dark titlebar (ctypes, dependency-free), shared by overlay + settings. Entry: `winscreen.py` (`monitor_workarea_at`, `list_monitors`, `primary_workarea`, `apply_dark_titlebar`).
 - **Assist client** — persistent HA WebSocket, one utterance at a time: mic capture, pipeline events → UI callback, TTS playback, barge-in cancel, conversation continuity + follow-up. Entry: `assist_client.py` (`AssistClient`, `_ws_is_open`, `test_credentials`).
 - **Config** — `config.json` load/save (atomic; token DPAPI-encrypted at rest), credential resolution, hotkey serialization. Entry: `config.py` (`Config`, `key_to_canon`, `hotkey_label`).
 - **Credentials at rest** — DPAPI (per-user) encrypt/decrypt of the HA token; graceful plaintext fallback. Entry: `dpapi.py` (`protect`, `unprotect`, `is_protected`). Wired into `config.load`/`save`.
