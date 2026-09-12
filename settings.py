@@ -165,6 +165,54 @@ class _Dropdown(ctk.CTkFrame):
             pass
 
 
+class _ScrollBody(tk.Frame):
+    """Fast scroll container: plain tk.Canvas + embedded CTkFrame + a plain tk
+    scrollbar, packed only when scrolling is actually needed.
+
+    Replaces CTkScrollableFrame, which made the dialog take ~3 s to BUILD — its
+    scrollbar's `_draw`/`set` re-enter layout over and over (measured 2026-09-12:
+    ~2.9 s with it, ~0.34 s without, same content — an 8× penalty). This also
+    removes the two reaches into CTk internals the old code needed
+    (`_parent_canvas.bbox`, `_scrollbar.grid_remove`).
+    Content packs into `.inner`; rows keep full width via the canvas-window bind.
+    """
+
+    def __init__(self, master, fg_color):
+        super().__init__(master, bg=fg_color)
+        self._fg = fg_color
+        self._canvas = tk.Canvas(self, bg=fg_color, highlightthickness=0, bd=0,
+                                 yscrollincrement=30)
+        self._canvas.pack(side="left", fill="both", expand=True)
+        self.inner = ctk.CTkFrame(self._canvas, fg_color=fg_color)
+        self._win_id = self._canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self._canvas.bind("<Configure>",
+                          lambda e: self._canvas.itemconfigure(self._win_id, width=e.width))
+        self.inner.bind("<Configure>",
+                        lambda e: self._canvas.configure(scrollregion=self._canvas.bbox("all")))
+
+    def content_height(self) -> int:
+        return self.inner.winfo_reqheight()
+
+    def enable_scrolling(self, toplevel):
+        """Add the scrollbar + wheel-scroll — called only when the window is
+        height-capped, so the fits-path never pays for it. The bar is a
+        standalone CTkScrollbar (dark; a plain tk.Scrollbar renders in Windows'
+        native LIGHT theme) built lazily HERE: constructing it costs ~0.3 s,
+        and the 3 s CTkScrollableFrame pathology was that frame's own relayout
+        loop, which this container doesn't have. Wheel binds on the TOPLEVEL:
+        children's bindtags include it, so scrolling works with the pointer
+        anywhere over the dialog."""
+        bar = ctk.CTkScrollbar(self, orientation="vertical", command=self._canvas.yview,
+                               width=14, fg_color=self._fg, button_color=S_FIELD,
+                               button_hover_color=S_HOVER)
+        self._canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+
+        def wheel(e):
+            self._canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+        toplevel.bind("<MouseWheel>", wheel)
+
+
 class SettingsDialog:
     """Modern rounded settings dialog (customtkinter) with a dark title bar."""
 
@@ -208,8 +256,9 @@ class SettingsDialog:
 
         # Scrollable content fills the space above the buttons — keeps the dialog usable
         # on small screens as it grows (it now exceeds a 1080p work area).
-        body = ctk.CTkScrollableFrame(win, fg_color=S_BG)
-        body.pack(side="top", fill="both", expand=True, padx=16, pady=(16, 0))
+        scroller = _ScrollBody(win, S_BG)
+        scroller.pack(side="top", fill="both", expand=True, padx=16, pady=(16, 0))
+        body = scroller.inner
 
         ctk.CTkLabel(body, text="AssistKey", text_color=S_FG,
                      font=("Segoe UI Semibold", 16)).pack(anchor="w")
@@ -382,38 +431,50 @@ class SettingsDialog:
             left, top, right, bottom = area
         else:
             left, top, right, bottom = 0, 0, win.winfo_screenwidth(), win.winfo_screenheight()
-        try:
-            box = body._parent_canvas.bbox("all")   # full content extent of the scroll frame
-            content_h = (box[3] - box[1]) if box else 700
-        except Exception:  # noqa: BLE001 - internals could change; fall back to a safe cap
-            content_h = 700
-        # Fixed width — a CTkScrollableFrame doesn't report its content's width, so
-        # winfo_reqwidth() collapses and would clip the rows. This fits the content
-        # (same rows as the old ~402 px dialog) plus the scrollbar.
+        content_h = scroller.content_height()
+        # Fixed width — a scroll container has no natural width of its own; this
+        # fits the content (same rows as the old ~402 px dialog) plus the scrollbar.
         w = 416
         desired_h = content_h + br.winfo_reqheight() + 80    # + button bar + paddings + slack
         area_h = (bottom - top) - 48                         # never taller than the work area
         if desired_h <= area_h:
-            h = desired_h
-            try:                    # content fits — hide the idle (non-scrolling) scrollbar
-                body._scrollbar.grid_remove()
-            except Exception:       # noqa: BLE001 - internals could change; harmless if so
-                pass
+            h = desired_h           # fits: the scrollbar simply never gets packed
         else:
-            h = area_h              # capped: the scrollbar stays and is actually used
+            h = area_h              # capped: show the scrollbar + enable wheel scrolling
+            scroller.enable_scrolling(win)
         x = left + (right - left - w) // 2
         y = top + max(20, (bottom - top - h) // 3)
         win.geometry(f"{w}x{h}+{x}+{y}")
 
-        # Everything is built, styled and positioned — NOW show it (see the
-        # withdraw at the top). The dark titlebar needs the real HWND, which
-        # only exists once mapped, so it's applied here (plus one re-apply,
-        # since DWM sometimes ignores the first call right at map time).
+        # Two-stage reveal (see the withdraw at the top). Deiconifying straight
+        # from withdraw STILL flashed white boxes: CustomTkinter widgets paint
+        # their dark faces only on <Configure> events with real sizes, and those
+        # are only delivered once the window is MAPPED — so the ~40 draws
+        # trickled in visibly after the map. Map it fully TRANSPARENT instead,
+        # let the event loop deliver every configure/draw while invisible, then
+        # turn opaque via after_idle (fires once that event flood has drained,
+        # nested once so draws queued BY those handlers finish too). A hard
+        # 1 s fallback guarantees no path leaves an invisible dialog around.
+        win.attributes("-alpha", 0.0)
         win.deiconify()
         win.lift()
         win.focus_force()
-        apply_dark_titlebar(win)
-        win.after(80, lambda: apply_dark_titlebar(win))
+        apply_dark_titlebar(win)   # HWND exists once mapped; re-applied at reveal
+
+        def _reveal():
+            try:
+                win.attributes("-alpha", 1.0)
+                apply_dark_titlebar(win)
+            except tk.TclError:
+                pass  # closed before it ever became visible
+
+        def _schedule_reveal():
+            try:
+                win.after_idle(_reveal)
+            except tk.TclError:
+                pass
+        win.after_idle(_schedule_reveal)
+        win.after(1000, _reveal)   # failsafe: never leave it invisible
 
     # ---- widgets ------------------------------------------------------------
 

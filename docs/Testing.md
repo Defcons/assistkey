@@ -31,10 +31,10 @@ HA disconnected → press the hotkey twice within a second (two "Reconnecting…
 Machine-verified: ~60 fps slide, one-item reply fade, idle timer-resolution drops back.
 - Hold hotkey, speak, release: Listening slides up smoothly (no steps); reply fades in without flicker; streaming text grows without tearing; popup slides away cleanly, no ghost. Your recognised words stay visible through the reply.
 
-### A6. Settings opens as ONE complete dialog (fix 2026-09-12)
-Reported: opening Settings showed white, half-built fields for a second-plus. Now it builds hidden and reveals complete. Machine-verified (probe): withdrawn through the whole build; first visible frame is the finished dark dialog (0.1 % white pixels).
-- Tray → Settings: a short beat (~1 s), then the dialog appears **fully drawn and dark in one go** — no white fields, no widgets popping in.
-- Everything else unchanged: correct position/size, dark titlebar, focused, Esc/capture/Save all work.
+### A6. Settings opens fast and as ONE complete dialog (fix 2026-09-12, round 2)
+Reported twice: slow open + white half-built fields. Round 1 (build-hidden) wasn't enough — CTk paints only after mapping. Now: two-stage transparent reveal (0.0 % white at the flip instant, machine-verified) AND the 8× CTkScrollableFrame build penalty replaced with a plain-canvas scroller.
+- Tray → Settings: a **short** beat (well under previous), then the dialog appears **fully drawn and dark in one go** — no white boxes, no widgets popping in.
+- Everything else unchanged: position/size, dark titlebar, focus, Esc/capture/Test/Save, and (on small screens) scrolling with a dark scrollbar.
 
 ---
 

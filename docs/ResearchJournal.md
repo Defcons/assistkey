@@ -786,3 +786,14 @@ Fix: build withdrawn, deiconify at the end fully styled/positioned (dark-titleba
 there too — needs the mapped HWND). Probe: withdrawn through all five section builds; first
 visible frame = the complete dialog, 0.1 % white-ish pixels (was: mostly white). 82 tests
 pass. Human feel-check → Testing A6.
+
+**Round 2 (same day):** user still saw white boxes — the withdraw-only fix was verified with a
+probe that pumped 250 ms before screenshotting, which hid exactly the window the user sees;
+their report was the real test. Deeper cause: CTk widgets paint only on post-MAP `<Configure>`
+events, so revealing straight from withdraw still showed the draw flood. Fixed with a
+two-stage reveal (map transparent → paint invisibly → `after_idle` flips opaque; 0.0 % white
+at the flip instant). Profiling the remaining slowness then caught the real hog: 
+**CTkScrollableFrame is an 8× build penalty** (~2.9 s vs ~0.34 s, clean in-process A/B) — its
+scrollbar re-enters layout on every `set`. Replaced with `_ScrollBody` (plain canvas + lazy
+dark CTkScrollbar on the capped path only), which also deleted both CTk-internals reaches from
+2026-08-27. Capped path re-verified: caps, Save mapped, wheel scrolls, dark bar. 82 tests.
