@@ -252,6 +252,10 @@ class AssistClient:
             await ws.send(json.dumps({"type": "auth", "access_token": self.token}))
             reply = json.loads(await ws.recv())
             if reply.get("type") != "auth_ok":
+                # Set the flag HERE, not in a caller: bootstrap's startup loop and
+                # pump's _reconnect both funnel through connect(), and a hotkey
+                # press must say "fix your token" in BOTH auth-dead states.
+                self._auth_failed = True
                 raise AuthFailed(f"Auth failed: {reply}")
         except BaseException:
             # Close the just-opened socket on ANY failure (auth error, cancel, bad
@@ -351,8 +355,7 @@ class AssistClient:
                 # day-long auth failure indistinguishable from a network blip.
                 log.warning("reconnect failed (%s: %s); retrying in %ds",
                             exc.__class__.__name__, exc, delay)
-                if isinstance(exc, AuthFailed):
-                    self._auth_failed = True
+                if isinstance(exc, AuthFailed):   # connect() has set _auth_failed
                     self.ui(("status", "Authentication failed — create a new token in "
                                        "Home Assistant and update it in Settings"))
                 # Interruptible backoff: a Settings save with corrected credentials

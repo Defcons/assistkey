@@ -33,7 +33,7 @@ import winsound
 
 import config as cfg
 import diag
-from assist_client import AssistClient
+from assist_client import AssistClient, AuthFailed
 from overlay import Overlay
 from wake import WakeListener
 
@@ -230,7 +230,12 @@ class App:
                     await self.client.load_pipelines()
                     break
                 except Exception as exc:  # noqa: BLE001 - retry until HA is reachable
-                    self.ui_queue.put(("status", f"Connect failed: {exc}; retrying…"))
+                    if isinstance(exc, AuthFailed):
+                        self.ui_queue.put(("status", "Authentication failed — create a new "
+                                                     "token in Home Assistant and update it "
+                                                     "in Settings"))
+                    else:
+                        self.ui_queue.put(("status", f"Connect failed: {exc}; retrying…"))
                     await asyncio.sleep(3)
             # Supervise pump(): it guards the expected close/parse errors itself,
             # but if anything else ever escapes it, letting it kill this loop

@@ -102,6 +102,7 @@ def test_connect_raises_authfailed_and_closes_socket(monkeypatch):
         asyncio.run(client.connect())
     assert fake.closed          # the failed socket must not leak
     assert client.ws is None    # never published
+    assert client._auth_failed is True   # set in connect() so EVERY caller path gets it
 
 
 def test_connect_success_clears_auth_failed_flag(monkeypatch):
@@ -129,8 +130,9 @@ def test_reconnect_auth_failure_sets_flag_and_actionable_status():
     async def fake_connect():
         state["n"] += 1
         if state["n"] == 1:
+            client._auth_failed = True    # mirrors the real connect()'s on-reject set
             raise ac.AuthFailed("Auth failed: token revoked")
-        client._auth_failed = False   # mirrors the real connect()'s on-success clear
+        client._auth_failed = False       # mirrors the real connect()'s on-success clear
 
     async def fake_load():
         pass
