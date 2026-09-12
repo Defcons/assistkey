@@ -772,3 +772,17 @@ the distilled fact + the revocation log-signature.
 path working as designed), token stored dpapi-encrypted. Testing A6 graduated: the
 save→instant-reconnect half is live-verified; the actionable-message half stays covered by
 unit tests only (the broken state is gone and not worth recreating by revoking a token).
+
+---
+
+## 2026-09-12 — Settings dialog white-flash: map-before-paint, not device enumeration
+
+**User report:** Settings takes a long time to open, fields WHITE while loading. Measured
+before guessing — the obvious suspect was innocent: `sd.query_devices()` is ~0.2 ms (PortAudio
+scans devices once at import, ~1 s paid at app START). The real mechanics: Windows maps a
+Toplevel the instant it's created, but content can't paint until `__init__` returns to the
+event loop — so the ~0.5-1 s CTk widget build played out on screen as a white skeleton.
+Fix: build withdrawn, deiconify at the end fully styled/positioned (dark-titlebar call moved
+there too — needs the mapped HWND). Probe: withdrawn through all five section builds; first
+visible frame = the complete dialog, 0.1 % white-ish pixels (was: mostly white). 82 tests
+pass. Human feel-check → Testing A6.

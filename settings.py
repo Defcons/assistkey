@@ -183,13 +183,18 @@ class SettingsDialog:
 
         win = ctk.CTkToplevel(root)
         self.win = win
+        # Build HIDDEN. Windows maps a Toplevel the moment it's created, but its
+        # content can't paint until this constructor returns to the event loop —
+        # so the user watched a WHITE skeleton assemble for the whole ~0.5 s
+        # widget build (+ CTk's deferred styling). Withdraw now, deiconify at the
+        # bottom once everything is built, styled and positioned: one clean,
+        # complete reveal instead. (Field report 2026-09-12.)
+        win.withdraw()
         win.title("AssistKey Settings")
         win.configure(fg_color=S_BG)
         win.attributes("-topmost", True)
         win.resizable(False, False)
         win.protocol("WM_DELETE_WINDOW", self._cancel)
-        apply_dark_titlebar(win)
-        win.after(80, lambda: apply_dark_titlebar(win))  # re-apply once mapped
 
         # Save/Cancel bar pinned at the BOTTOM (packed first so it stays visible even
         # when the content is taller than the screen and the body scrolls).
@@ -399,6 +404,16 @@ class SettingsDialog:
         x = left + (right - left - w) // 2
         y = top + max(20, (bottom - top - h) // 3)
         win.geometry(f"{w}x{h}+{x}+{y}")
+
+        # Everything is built, styled and positioned — NOW show it (see the
+        # withdraw at the top). The dark titlebar needs the real HWND, which
+        # only exists once mapped, so it's applied here (plus one re-apply,
+        # since DWM sometimes ignores the first call right at map time).
+        win.deiconify()
+        win.lift()
+        win.focus_force()
+        apply_dark_titlebar(win)
+        win.after(80, lambda: apply_dark_titlebar(win))
 
     # ---- widgets ------------------------------------------------------------
 

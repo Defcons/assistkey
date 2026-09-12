@@ -2,7 +2,7 @@
 
 _Pending manual checks: what needs a human — eyes, a live Home Assistant, or a second machine — that automated tests + probes couldn't cover. Each has repro + pass criteria (runnable cold) + what's already machine-verified. Confirm one → delete it (graduate any durable result to KnowledgeBase/Journal). Ordered most-valuable first. Many B-items are probably already fine from daily use; they just haven't been formally rubber-stamped._
 
-_Last updated: 2026-09-12 (A6 confirmed live and graduated)_
+_Last updated: 2026-09-12 (settings white-flash fix pending confirm)_
 
 ---
 
@@ -30,6 +30,11 @@ HA disconnected → press the hotkey twice within a second (two "Reconnecting…
 ### A5. Popup looks smooth
 Machine-verified: ~60 fps slide, one-item reply fade, idle timer-resolution drops back.
 - Hold hotkey, speak, release: Listening slides up smoothly (no steps); reply fades in without flicker; streaming text grows without tearing; popup slides away cleanly, no ghost. Your recognised words stay visible through the reply.
+
+### A6. Settings opens as ONE complete dialog (fix 2026-09-12)
+Reported: opening Settings showed white, half-built fields for a second-plus. Now it builds hidden and reveals complete. Machine-verified (probe): withdrawn through the whole build; first visible frame is the finished dark dialog (0.1 % white pixels).
+- Tray → Settings: a short beat (~1 s), then the dialog appears **fully drawn and dark in one go** — no white fields, no widgets popping in.
+- Everything else unchanged: correct position/size, dark titlebar, focused, Esc/capture/Save all work.
 
 ---
 
