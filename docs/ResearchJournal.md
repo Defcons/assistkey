@@ -735,3 +735,27 @@ generation counters, _Job after-handle wrapper, unifying the two connect-retry l
 Explicitly audited CLEAN: suppress_done loop-serialization, wake pause/resume balance on all
 terminal paths, overlay main-thread discipline, GIL-atomic config reads, no-double-connect,
 executor sizing, shutdown daemon-ness.
+
+---
+
+## 2026-09-12 — Field incident: server-side token revocation; app now says so
+
+**User report:** "authentication failed — check the token" (Settings → Test connection).
+Log-diagnosed in minutes thanks to the 2026-08-29 hygiene logging: NO DPAPI warnings (so the
+stored token decrypts fine — storage/encryption healthy), the stored blob decrypts to a
+JWT-shaped 183-char token, and a live `test_credentials` probe with that exact token
+reproduces the rejection. Timeline from the log: last good connect 2026-09-04 20:06 (HA
+2026.9.0 — the 2026.8→9 upgrade itself ran fine for 2 days); at **2026-09-11 13:43** HA
+closed the socket cleanly and every reconnect since was auth-rejected — the signature of the
+token being revoked/deleted server-side (revocation kicks its live connection). Remedy is
+user-side: mint a new long-lived token in HA, paste into Settings.
+
+**What the incident exposed (fixed):** the app spent a DAY auth-dead looking merely
+"disconnected" — the log said only `reconnect failed (RuntimeError)` (class, no message), the
+tray status was stale, and a hotkey press claimed "Reconnecting to Home Assistant…" (a lie:
+retrying can never fix a revoked token). Now: `connect()` raises a distinct `AuthFailed`;
+`_reconnect` logs the full failure message and, on auth rejection, sets `_auth_failed` + an
+actionable tray status ("create a new token in Home Assistant and update it in Settings");
+a hotkey press while auth-dead shows that same actionable error instead of "Reconnecting…";
+the flag clears the moment a connect authenticates. Synergy with the 2026-08-29 retry-kick:
+saving the new token reconnects instantly instead of waiting out the backoff. 82 tests (+4).

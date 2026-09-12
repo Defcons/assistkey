@@ -65,6 +65,101 @@ def test_start_utterance_mid_reconnect_silent_for_wake():
     assert ("done",) in emitted
 
 
+class _HandshakeWS:
+    """Fake websocket that walks the auth handshake with scripted replies."""
+
+    def __init__(self, replies):
+        import json as _json
+        self._replies = [_json.dumps(r) for r in replies]
+        self.closed = False
+
+    async def recv(self):
+        return self._replies.pop(0)
+
+    async def send(self, *a):
+        pass
+
+    async def close(self):
+        self.closed = True
+
+
+def test_connect_raises_authfailed_and_closes_socket(monkeypatch):
+    # 2026-09-12 field incident: a server-side token revocation surfaced only as
+    # "RuntimeError" retries. Auth rejection is now its own type so callers can
+    # tell "retrying is pointless" apart from a network blip.
+    import assist_client as ac
+    import pytest
+
+    fake = _HandshakeWS([{"type": "auth_required"},
+                         {"type": "auth_invalid", "message": "Invalid access token"}])
+
+    async def fake_ws_connect(*a, **k):
+        return fake
+    monkeypatch.setattr(ac.websockets, "connect", fake_ws_connect)
+
+    client = AssistClient(cfg.Config(ha_url="https://x", ha_token="t"), ui=lambda _c: None)
+    with pytest.raises(ac.AuthFailed):
+        asyncio.run(client.connect())
+    assert fake.closed          # the failed socket must not leak
+    assert client.ws is None    # never published
+
+
+def test_connect_success_clears_auth_failed_flag(monkeypatch):
+    import assist_client as ac
+    fake = _HandshakeWS([{"type": "auth_required"},
+                         {"type": "auth_ok", "ha_version": "2026.9.0"}])
+
+    async def fake_ws_connect(*a, **k):
+        return fake
+    monkeypatch.setattr(ac.websockets, "connect", fake_ws_connect)
+
+    client = AssistClient(cfg.Config(ha_url="https://x", ha_token="t"), ui=lambda _c: None)
+    client._auth_failed = True                  # a previous attempt was rejected
+    asyncio.run(client.connect())
+    assert client._auth_failed is False         # proven good again
+    assert client.ws is fake
+
+
+def test_reconnect_auth_failure_sets_flag_and_actionable_status():
+    import assist_client as ac
+    emitted = []
+    client = AssistClient(cfg.Config(), ui=emitted.append)
+    state = {"n": 0}
+
+    async def fake_connect():
+        state["n"] += 1
+        if state["n"] == 1:
+            raise ac.AuthFailed("Auth failed: token revoked")
+        client._auth_failed = False   # mirrors the real connect()'s on-success clear
+
+    async def fake_load():
+        pass
+    client.connect = fake_connect
+    client.load_pipelines = fake_load
+
+    async def run():
+        task = asyncio.ensure_future(client._reconnect())
+        await asyncio.sleep(0.05)     # first attempt rejected; now in backoff
+        assert client._auth_failed is True
+        assert any(c[0] == "status" and "token" in c[1].lower() for c in emitted), emitted
+        client._retry_kick.set()      # skip the backoff; second attempt succeeds
+        await asyncio.wait_for(task, timeout=2)
+    asyncio.run(run())
+    assert client._auth_failed is False
+
+
+def test_hotkey_press_during_auth_failure_says_update_token():
+    # A press while auth-dead used to say "Reconnecting to Home Assistant…" —
+    # a lie (retrying can't fix a revoked token). It must say what to DO.
+    emitted = []
+    client = AssistClient(cfg.Config(), ui=emitted.append)
+    client._auth_failed = True
+    client.ws = _FakeWS("CLOSED")
+    asyncio.run(client.start_utterance(notify_unavailable=True))
+    assert emitted and emitted[0][0] == "error"
+    assert "token" in emitted[0][1].lower(), emitted[0]
+
+
 def test_is_active_reflects_state():
     client = AssistClient(cfg.Config(), ui=lambda _c: None)
     assert client.is_active() is False

@@ -75,6 +75,14 @@ def _ws_is_open(ws) -> bool:
     return getattr(getattr(ws, "state", None), "name", None) == "OPEN"
 
 
+class AuthFailed(RuntimeError):
+    """Home Assistant answered and REJECTED the credentials. Unlike a network
+    failure, no amount of retrying can fix this — only a new token can, so the
+    UI should tell the user what to DO instead of claiming to be reconnecting.
+    (2026-09-12: a server-side token revocation left the app silently
+    auth-looping for a day with only "RuntimeError" in the log.)"""
+
+
 async def test_credentials(url: str, token: str) -> tuple[bool, str]:
     """Try to connect + authenticate. Returns (ok, human-readable message).
 
@@ -193,6 +201,7 @@ class AssistClient:
         self._release = asyncio.Event()
         self._cancel = asyncio.Event()          # barge-in: abort the current run
         self._retry_kick = asyncio.Event()      # cut _reconnect's backoff short (new creds saved)
+        self._auth_failed = False               # last connect attempt was auth-REJECTED (not network)
         self._suppress_next_done = False        # see restart_utterance
         self.pipelines: list[dict] = []
         self.preferred_pipeline: str | None = None
@@ -243,7 +252,7 @@ class AssistClient:
             await ws.send(json.dumps({"type": "auth", "access_token": self.token}))
             reply = json.loads(await ws.recv())
             if reply.get("type") != "auth_ok":
-                raise RuntimeError(f"Auth failed: {reply}")
+                raise AuthFailed(f"Auth failed: {reply}")
         except BaseException:
             # Close the just-opened socket on ANY failure (auth error, cancel, bad
             # handshake) so a failed connect doesn't leak an open connection each
@@ -254,6 +263,7 @@ class AssistClient:
                 pass
             raise
         self.ws = ws
+        self._auth_failed = False   # credentials proven good again
         log.info("connected to Home Assistant %s at %s", reply.get("ha_version"), self.server)
         self.ui(("status", f"Connected (HA {reply.get('ha_version')})"))
         self.ui(("connected",))
@@ -337,7 +347,14 @@ class AssistClient:
                 await self.load_pipelines()
                 return
             except Exception as exc:  # noqa: BLE001 - keep retrying with backoff
-                log.warning("reconnect failed (%s); retrying in %ds", exc.__class__.__name__, delay)
+                # Log the MESSAGE, not just the class — "RuntimeError" alone made a
+                # day-long auth failure indistinguishable from a network blip.
+                log.warning("reconnect failed (%s: %s); retrying in %ds",
+                            exc.__class__.__name__, exc, delay)
+                if isinstance(exc, AuthFailed):
+                    self._auth_failed = True
+                    self.ui(("status", "Authentication failed — create a new token in "
+                                       "Home Assistant and update it in Settings"))
                 # Interruptible backoff: a Settings save with corrected credentials
                 # kicks this (force_reconnect) so the user isn't stuck watching
                 # "Disconnected" for up to 30 s after fixing a typo'd URL.
@@ -411,7 +428,13 @@ class AssistClient:
             # may have paused wake-word listening, and only ("done",)/("error",)
             # resumes it — otherwise wake stays paused until the app is restarted.
             if notify_unavailable:
-                self.ui(("error", "Reconnecting to Home Assistant…"))
+                if self._auth_failed:
+                    # "Reconnecting…" would be a lie here — retrying can't fix a
+                    # revoked token. Tell the user the one thing that will.
+                    self.ui(("error", "Authentication failed — create a new token in "
+                                      "Home Assistant and update it in Settings."))
+                else:
+                    self.ui(("error", "Reconnecting to Home Assistant…"))
             else:
                 self.ui(("done",))
             return
