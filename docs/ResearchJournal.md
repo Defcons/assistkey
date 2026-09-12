@@ -759,3 +759,10 @@ actionable tray status ("create a new token in Home Assistant and update it in S
 a hotkey press while auth-dead shows that same actionable error instead of "Reconnecting…";
 the flag clears the moment a connect authenticates. Synergy with the 2026-08-29 retry-kick:
 saving the new token reconnects instantly instead of waiting out the backoff. 82 tests (+4).
+
+**Same-day addendum (4aad83a):** live verification against the actual broken state caught a
+gap in the first cut — an app that STARTS with a dead token fails in bootstrap's loop, which
+never set `_auth_failed` (only `_reconnect` did), so the hotkey still said "Reconnecting…" in
+exactly the state being fixed. Flag ownership moved into `connect()` itself (every caller
+funnels through it); bootstrap now shows the same actionable status. KB §Pipeline/audio holds
+the distilled fact + the revocation log-signature.
