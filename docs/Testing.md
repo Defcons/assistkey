@@ -31,6 +31,12 @@ HA disconnected → press the hotkey twice within a second (two "Reconnecting…
 Machine-verified: ~60 fps slide, one-item reply fade, idle timer-resolution drops back.
 - Hold hotkey, speak, release: Listening slides up smoothly (no steps); reply fades in without flicker; streaming text grows without tearing; popup slides away cleanly, no ghost. Your recognised words stay visible through the reply.
 
+### A6. Auth-dead now actionable (fix 2026-09-12) — confirm while re-tokening
+You're already in the broken state, so this rides along with the remedy:
+1. With the old (revoked) token still saved, press the hotkey → popup says **"Authentication failed — create a new token in Home Assistant and update it in Settings."** (NOT "Reconnecting…"). Tray tooltip says the same.
+2. HA → profile → Security → Long-lived access tokens → Create token → paste into Settings → Save → tray goes grey and `assistkey.log` shows `connected to Home Assistant` within ~a second (the Save kicks the backoff).
+Machine-verified: AuthFailed raised+socket closed on rejection, flag set/cleared, actionable status + hotkey error, 82 tests.
+
 ---
 
 ## B — Feature confirmations (never formally checked; likely fine from daily use)
@@ -85,9 +91,3 @@ Machine-verified: a draft built against your REAL config + a realistic crash log
 
 ## Retired (resolved — kept out of the queue for reference)
 - **"Diagnose popup lingers past `dismiss_seconds`" (2026-08-24):** root-caused in the 2026-08-27 audit. Two mechanisms, both handled — the repeated-`error()` dismiss bug (FIXED, now A4) and the uninterruptible 15 s TTS fetch (a genuine cause of lingering, now the deferred item in ToDo). The `tts playback finished (%.2fs)` / watchdog logging stays in place to pinpoint any future case instantly.
-
-### A6. Auth-dead now actionable (fix 2026-09-12) — confirm while re-tokening
-You're already in the broken state, so this rides along with the remedy:
-1. With the old (revoked) token still saved, press the hotkey → popup says **"Authentication failed — create a new token in Home Assistant and update it in Settings."** (NOT "Reconnecting…"). Tray tooltip says the same.
-2. HA → profile → Security → Long-lived access tokens → Create token → paste into Settings → Save → tray goes grey and `assistkey.log` shows `connected to Home Assistant` within ~a second (the Save kicks the backoff).
-Machine-verified: AuthFailed raised+socket closed on rejection, flag set/cleared, actionable status + hotkey error, 82 tests.
