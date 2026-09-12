@@ -2,7 +2,7 @@
 
 _Pending manual checks: what needs a human — eyes, a live Home Assistant, or a second machine — that automated tests + probes couldn't cover. Each has repro + pass criteria (runnable cold) + what's already machine-verified. Confirm one → delete it (graduate any durable result to KnowledgeBase/Journal). Ordered most-valuable first. Many B-items are probably already fine from daily use; they just haven't been formally rubber-stamped._
 
-_Last updated: 2026-09-12 (auth-dead actionable-message fix pending confirm)_
+_Last updated: 2026-09-12 (A6 confirmed live and graduated)_
 
 ---
 
@@ -30,12 +30,6 @@ HA disconnected → press the hotkey twice within a second (two "Reconnecting…
 ### A5. Popup looks smooth
 Machine-verified: ~60 fps slide, one-item reply fade, idle timer-resolution drops back.
 - Hold hotkey, speak, release: Listening slides up smoothly (no steps); reply fades in without flicker; streaming text grows without tearing; popup slides away cleanly, no ghost. Your recognised words stay visible through the reply.
-
-### A6. Auth-dead now actionable (fix 2026-09-12) — confirm while re-tokening
-You're already in the broken state, so this rides along with the remedy:
-1. With the old (revoked) token still saved, press the hotkey → popup says **"Authentication failed — create a new token in Home Assistant and update it in Settings."** (NOT "Reconnecting…"). Tray tooltip says the same.
-2. HA → profile → Security → Long-lived access tokens → Create token → paste into Settings → Save → tray goes grey and `assistkey.log` shows `connected to Home Assistant` within ~a second (the Save kicks the backoff).
-Machine-verified: AuthFailed raised+socket closed on rejection, flag set/cleared, actionable status + hotkey error, 82 tests.
 
 ---
 

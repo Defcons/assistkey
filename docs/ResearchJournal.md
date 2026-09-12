@@ -766,3 +766,9 @@ never set `_auth_failed` (only `_reconnect` did), so the hotkey still said "Reco
 exactly the state being fixed. Flag ownership moved into `connect()` itself (every caller
 funnels through it); bootstrap now shows the same actionable status. KB §Pipeline/audio holds
 the distilled fact + the revocation log-signature.
+
+**Confirmed live 2026-09-12 11:22:** user minted a new token and saved it — the log shows
+`connected to Home Assistant 2026.9.0` within a second of the config write (the retry-kick
+path working as designed), token stored dpapi-encrypted. Testing A6 graduated: the
+save→instant-reconnect half is live-verified; the actionable-message half stays covered by
+unit tests only (the broken state is gone and not worth recreating by revoking a token).
