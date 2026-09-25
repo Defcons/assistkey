@@ -256,10 +256,9 @@ class SettingsDialog:
         self._section(body, "HOME ASSISTANT")
         _url, _token = config.credentials()  # show effective values (incl. env-var fallback)
         self.url_var = tk.StringVar(value=_url)
-        self._entry(body, "Server URL", self.url_var, placeholder="https://homeassistant.local:8123",
-                    tip="Your Home Assistant address, including https:// and port — e.g.\n"
-                        "https://homeassistant.local:8123 or your external URL.\n"
-                        "Must be https: browsers/Windows block microphone capture over plain http.")
+        self._entry(body, "Server URL", self.url_var, placeholder="http://homeassistant.local:8123",
+                    tip="Your Home Assistant address with the port, e.g.\n"
+                        "http://homeassistant.local:8123 or your external https URL.")
         self.token_var = tk.StringVar(value=_token)
         self._entry(body, "Access token", self.token_var, mask=True, placeholder="Long-lived access token",
                     tip="A Long-Lived Access Token — it lets this app connect to your Home Assistant.\n"
