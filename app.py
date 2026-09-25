@@ -1,7 +1,7 @@
-"""AssistKey — system-tray push-to-talk app for Home Assistant Assist.
+"""AssistKey: system-tray push-to-talk app for Home Assistant Assist.
 
-Hold the configured hotkey to talk to Jarvis. A tray icon shows state; an
-always-on-top toast shows Listening / your words / the streaming reply.
+Hold the hotkey to talk to your HA voice assistant. A tray icon shows the
+connection state and a popup shows Listening, your words and the reply.
 
 Threads:
   - main thread     : tkinter GUI (overlay + settings), drains a UI queue
@@ -45,22 +45,17 @@ DISCONNECTED_COL = (200, 110, 100)  # not connected to Home Assistant
 
 
 def kill_previous_instances():
-    """Terminate any other instance of this app before we start.
+    """Kill any other running copy of the app before we start.
 
-    Matches by the process's EXECUTABLE PATH (always the full
-    `assistkey\\.venv\\Scripts\\python*.exe`), NOT its command line — because a
-    run.bat launch records a *relative* command line (`.venv\\Scripts\\python.exe
-    -u app.py`) with no folder name in it, which a command-line match misses
-    (that's how a stray duplicate survived and fought over the mic). The exe path
-    is fully resolved regardless of how the process was started.
+    Matches on the executable path (`assistkey\\.venv\\Scripts\\python*.exe`)
+    rather than the command line, because a run.bat launch has a relative
+    command line with no folder name in it.
 
-    The venv python is a launcher shim that spawns the real interpreter as a
-    child, so ONE instance is two PIDs (self + parent shim). We exclude both so
-    the killer never takes down its own process tree.
+    The venv python is a launcher that starts the real interpreter as a child,
+    so one instance is two PIDs. Both are excluded so we don't kill ourselves.
 
-    Frozen (PyInstaller) build: the process IS `AssistKey.exe`, so match that name
-    directly — the venv-python path heuristic would otherwise select unrelated
-    `python.exe` processes under the exe's folder.
+    In the PyInstaller build the process is AssistKey.exe, so match that name
+    instead; the venv path check would pick up unrelated python.exe processes.
     """
     mine = {os.getpid(), os.getppid()}
     keep = " -and ".join(f"$_.ProcessId -ne {p}" for p in mine)
@@ -98,10 +93,10 @@ def make_icon(color) -> Image.Image:
 
 
 class HotkeyListener:
-    """Global hotkey with two modes (read live from config.trigger_mode):
+    """Global hotkey with two modes, read live from config.trigger_mode:
 
-    hold   — talk while the combo is held; release ends the utterance.
-    toggle — one full press starts; the next full press ends.
+    hold:   talk while the keys are held; releasing ends the utterance.
+    toggle: one press starts, the next press ends.
     """
 
     def __init__(self, config: cfg.Config, on_down, on_up):
@@ -123,8 +118,8 @@ class HotkeyListener:
         self._talking = False
 
     def suspend(self):
-        """Stop reacting to keys — used while the Settings dialog is capturing a
-        new hotkey, so pressing the *current* hotkey there can't start an utterance."""
+        """Ignore keys while Settings is capturing a new hotkey, so pressing the
+        current one there doesn't start an utterance."""
         self._suspended = True
         self.reset()
 
@@ -133,7 +128,7 @@ class HotkeyListener:
         self.reset()
 
     def mark_idle(self):
-        """The utterance ended on its own (done/error) — resync toggle state."""
+        """The utterance ended by itself (done/error), so reset the toggle state."""
         self._talking = False
 
     def _press(self, key):
@@ -169,7 +164,7 @@ class HotkeyListener:
 
 class App:
     def __init__(self):
-        kill_previous_instances()  # replace any running copy (no duplicate F9 listeners)
+        kill_previous_instances()  # only one copy may hold the hotkey and mic
         self.config = cfg.Config.load()
         diag.log_config(self.config)
 
@@ -181,7 +176,7 @@ class App:
         self.ui_queue: "queue.Queue" = queue.Queue()
         self._connected = False
         self._follow_up_next = False   # the next Listening is an auto follow-up
-        self._quitting = False         # set in _quit so _drain stops rescheduling on a dead root
+        self._quitting = False         # stops _drain rescheduling once the root is destroyed
 
         self.loop = asyncio.new_event_loop()
         self.client = AssistClient(self.config, ui=lambda cmd: self.ui_queue.put(cmd))
@@ -211,7 +206,7 @@ class App:
         self.icon.run_detached()
         self.root.after(20, self._drain)
         if not self.config.is_configured():
-            # First run / no credentials — open Settings so the user can connect.
+            # First run: open Settings so the user can enter their HA details.
             self.root.after(400, lambda: self.ui_queue.put(("open_settings",)))
         self.root.mainloop()
 
@@ -237,10 +232,8 @@ class App:
                     else:
                         self.ui_queue.put(("status", f"Connect failed: {exc}; retrying…"))
                     await asyncio.sleep(3)
-            # Supervise pump(): it guards the expected close/parse errors itself,
-            # but if anything else ever escapes it, letting it kill this loop
-            # thread makes a silent zombie — tray alive, hotkey dead, wake stuck
-            # paused on its next trigger. Recover instead, like everything else.
+            # pump() handles the errors it expects. If anything else escapes,
+            # restart it rather than let this thread die (tray alive, hotkey dead).
             while True:
                 try:
                     await self.client.pump()
@@ -255,18 +248,14 @@ class App:
     # ---- hotkey -> asyncio --------------------------------------------------
 
     def _hotkey_down(self):
-        # Runs on the pynput listener thread. An exception escaping here would make
-        # pynput STOP the listener permanently (a stopped Listener can't restart) —
-        # a dead hotkey with the tray still alive. Isolate it.
+        # Runs on the pynput thread. An exception here would stop the listener for
+        # good and leave the hotkey dead, so catch everything.
         try:
             if self.config.wake_enabled:
                 self.wake.pause()  # free the mic for the utterance
-            # restart_utterance cancels any in-flight reply first (even mid-TTS
-            # playback) so the Listening popup always takes over — one press always
-            # gets you talking, instead of the first press just stopping the old
-            # reply and requiring a second press to actually start listening.
-            # notify_unavailable: a deliberate key-press deserves feedback if we're
-            # not connected yet (a gentle "Reconnecting…" instead of a raw error).
+            # restart_utterance cancels any reply still playing, so one press
+            # always starts listening. notify_unavailable shows "Reconnecting…"
+            # instead of a raw error when we're not connected.
             asyncio.run_coroutine_threadsafe(
                 self.client.restart_utterance(notify_unavailable=True), self.loop)
         except Exception:  # noqa: BLE001 - never let the hotkey listener die
@@ -279,16 +268,14 @@ class App:
             log.exception("hotkey_up failed")
 
     def _on_wake(self):
-        # Runs on the wake thread: pause listening, chime, run one utterance.
-        # No key release — Home Assistant's VAD ends the utterance.
+        # Runs on the wake thread. There's no key release here: HA's voice
+        # detection ends the utterance.
         self.wake.pause()
         try:
             winsound.Beep(760, 110)
         except Exception:  # noqa: BLE001
             pass
-        # Same barge-in behaviour as the hotkey (see _hotkey_down): if a reply is
-        # still active when the wake word fires, cancel it and start listening
-        # right away instead of silently doing nothing.
+        # Like the hotkey: cancel any reply still playing and start listening.
         asyncio.run_coroutine_threadsafe(self.client.restart_utterance(), self.loop)
 
     # ---- UI queue drain (main thread) --------------------------------------
@@ -304,7 +291,7 @@ class App:
         except queue.Empty:
             pass
         if not self._quitting:
-            self.root.after(20, self._drain)  # reschedule — the UI pump must never die (until quit)
+            self.root.after(20, self._drain)  # keep polling until quit
 
     def _set_idle_icon(self):
         """Tray icon at rest: grey when connected, red when not."""
@@ -348,8 +335,8 @@ class App:
             self.overlay.error(args[0])
         elif name == "done":
             if self.client.consume_follow_up():
-                # HA asked to continue: keep wake paused, auto-listen (VAD-ended),
-                # and mark the next Listening popup as a follow-up so it's clearly labelled.
+                # HA wants an answer: keep the wake word paused and listen again
+                # (HA's voice detection ends it), labelled as a follow-up.
                 log.info("done -> follow-up, auto-listening again")
                 self._follow_up_next = True
                 asyncio.run_coroutine_threadsafe(self.client.start_utterance(), self.loop)
@@ -371,8 +358,8 @@ class App:
             except Exception:  # noqa: BLE001
                 log.exception("could not open log file")
         elif name == "report_issue":
-            # Opens a PRE-FILLED GitHub issue draft in the user's browser for them to
-            # review and submit themselves — nothing is sent automatically/silently.
+            # Opens a prefilled GitHub issue in the browser for the user to review
+            # and submit. Nothing is sent automatically.
             try:
                 webbrowser.open(diag.build_issue_url(self.config))
                 log.info("opened issue-report draft")
@@ -381,15 +368,13 @@ class App:
         elif name == "quit":
             self._quit()
         else:
-            # The tuple protocol's worst property is that a typo'd or half-wired
-            # event vanishes without a trace — make it a logged one instead.
+            # Log it so a misspelled event name doesn't fail silently.
             log.warning("unknown ui command %r", cmd)
 
     def _on_settings_saved(self):
         self.hotkey.reset()
         self.icon.title = f"AssistKey — {cfg.hotkey_label(self.config.hotkey)} to talk"
-        # Apply any credential change: drop the socket so it reconnects with new creds
-        # (also kicks the bootstrap loop if we were never connected).
+        # Reconnect if the URL or token changed.
         asyncio.run_coroutine_threadsafe(self.client.force_reconnect(), self.loop)
 
     def _log_exception(self, exc, val, tb):
@@ -397,12 +382,11 @@ class App:
 
     def _quit(self):
         log.info("quit requested")
-        self._quitting = True   # stop _drain rescheduling after root is destroyed (avoids a TclError)
+        self._quitting = True
         try:
-            # Stop any in-flight run FIRST — especially TTS playback. Without this,
-            # the interpreter's exit joins the executor thread that's inside the
-            # playback, so the app keeps talking to the end of the clip AFTER the
-            # tray icon (and its Stop menu) are gone.
+            # Cancel first so a reply that's playing stops now. Otherwise exit
+            # waits for the playback thread and the reply keeps talking after the
+            # tray icon is gone.
             self.client.request_cancel()
         except Exception:  # noqa: BLE001
             pass

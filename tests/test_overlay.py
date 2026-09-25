@@ -1,4 +1,4 @@
-"""Overlay: the popup must never get stuck — dismissal + failure recovery."""
+"""Overlay: the popup must never get stuck (dismissal and failure recovery)."""
 import time
 
 import tkinter as tk
@@ -18,7 +18,7 @@ def _pump(root, seconds):
 
 @pytest.fixture(scope="module")
 def root():
-    # One shared root for the module — re-creating Tk() per test is flaky.
+    # One shared root for the module; creating Tk() per test is flaky.
     try:
         r = tk.Tk()
     except tk.TclError:
@@ -125,15 +125,14 @@ def test_transcript_resets_on_new_utterance(root):
 
 
 def test_repeated_error_reschedules_dismiss(root):
-    # A second error() while the first error popup is already settled must still
-    # (re)schedule a dismiss. Regression: it used to cancel the dismiss without
-    # rescheduling -> popup stuck until the ~22s watchdog.
+    # A second error() while the first error popup is showing must schedule a
+    # new dismiss, or the popup stays up until the watchdog.
     c = cfg.Config()
     c.dismiss_seconds = 0.4
     ov = Overlay(root, c)
     ov.error("first error")
     _pump(root, 0.6)                       # let it settle
     ov.error("second error")               # arrives while settled + visible
-    assert ov._dismiss_job is not None     # a dismiss MUST be scheduled again
+    assert ov._dismiss_job is not None     # a new dismiss is scheduled
     _pump(root, 1.3)                        # past dismiss_seconds + slide-out
     assert ov._shown is False              # dismissed normally, not stuck

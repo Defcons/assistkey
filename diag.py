@@ -1,13 +1,12 @@
-"""Central logging + crash capture so field issues are diagnosable from assistkey.log.
+"""Logging and crash capture, so problems can be diagnosed from assistkey.log.
 
-One rotating file (assistkey.log, plus .1/.2/.3), every line timestamped with a level
-and thread name, and hooks that catch otherwise-invisible crashes in EVERY thread —
-main, the asyncio loop, the pynput hotkey listener, the pystray tray — as well as any
-stray stdout/stderr (there is no console under pythonw, so uncaught output vanishes
-otherwise). The access token is never written.
+One rotating log file (assistkey.log plus .1/.2/.3) with a timestamp, level and
+thread name on every line. Hooks catch uncaught exceptions in every thread (main,
+asyncio loop, hotkey listener, tray) and stray stdout/stderr, since pythonw has
+no console. The access token is never logged.
 
-Usage: call `setup()` once at startup, then `logging.getLogger("assistkey.<area>")`
-anywhere. `log_config(config)` records a redacted one-line snapshot for context.
+Call `setup()` once at startup, then use `logging.getLogger("assistkey.<area>")`.
+`log_config(config)` logs a one-line summary with the token hidden.
 """
 
 from __future__ import annotations
@@ -33,20 +32,16 @@ TAIL_CHARS = 4000             # fallback excerpt when nothing rose to ERROR/CRIT
 _TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ")
 _ERR_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (ERROR|CRITICAL)\s")
 
-# Patterns of things that can end up inside an exception message/traceback and
-# would identify the reporter or their network if posted verbatim to a PUBLIC
-# issue: any URL, a JWT-shaped string (HA long-lived tokens look like this —
-# defence in depth, since nothing currently logs the token), a Windows user
-# profile path, and IPv4 addresses.
+# Things that can end up in an exception message and would identify the user or
+# their network in a public issue: URLs, JWT-shaped strings (HA tokens look like
+# this), Windows user profile paths and IPv4 addresses.
 _URL_RE = re.compile(r"https?://\S+")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 _WIN_USER_RE = re.compile(r"(C:\\Users\\)[^\\\s]+")
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
-# Deliberately minimal beyond the excerpt: no config dump, no raw file paths, no
-# raw log line count. Everything reaching the excerpt slot has already gone
-# through `_redact` — but a human glance is still the last line of defence, since
-# no regex catches everything a future log line might contain.
+# The body holds only the redacted excerpt and basic system info. The user still
+# reviews it before submitting, since no regex catches everything.
 _ISSUE_TEMPLATE = """### What were you doing?
 <!-- e.g. "Pressed the hotkey and started talking" -->
 
@@ -131,12 +126,10 @@ def log_config(config) -> None:
 
 
 def _redact(text: str, config=None) -> str:
-    """Strip privacy-sensitive substrings from log text before it goes into a
-    PUBLIC issue draft. Two passes: an exact replace of the user's OWN configured
-    Home Assistant URL/host (most precise — labels it clearly), then generic
-    patterns for anything else that slipped in (a different URL, a token-shaped
-    string, a Windows user path, an IPv4 address). Errs toward over-redacting —
-    losing a little context is fine, leaking an address or a path isn't.
+    """Remove personal details from log text before it goes into a public issue:
+    first the user's own HA URL and host, then generic patterns (other URLs,
+    token-shaped strings, Windows user paths, IPv4 addresses). Errs on the side
+    of removing too much.
     """
     if config is not None:
         try:
@@ -170,15 +163,13 @@ def _tail(path: Path, chars: int = TAIL_CHARS) -> str:
 
 
 def find_error_excerpt(candidates, max_chars: int = MAX_EXCERPT_CHARS) -> str:
-    """The most recent ERROR/CRITICAL log record (+ any traceback under it) found
-    across `candidates`, checked newest-file-first. A record's traceback lines
-    have no timestamp, so a block runs until the next timestamped line or EOF.
+    """The most recent ERROR/CRITICAL record and its traceback, searching the
+    newest file first. Traceback lines have no timestamp, so a record runs until
+    the next timestamped line.
 
-    Falls back to the tail of the first non-empty log if nothing reached
-    ERROR/CRITICAL — routine WARNING noise (a reconnect retry, say) is skipped in
-    favour of a real crash whenever one exists. Returned text is NOT yet redacted
-    — callers must pass it through `_redact` before it leaves the machine.
-    (Param renamed from `paths`: it shadowed the `paths` module.)
+    If there is no error at all, returns the tail of the first non-empty log.
+    The result is not redacted yet: pass it through `_redact` before it leaves
+    the machine.
     """
     for path in candidates:
         try:
@@ -201,11 +192,9 @@ def find_error_excerpt(candidates, max_chars: int = MAX_EXCERPT_CHARS) -> str:
 
 
 def build_issue_url(config=None, log_dir: Path | None = None, repo_url: str = REPO_URL) -> str:
-    """A GitHub 'new issue' URL prefilled with a title and the most recent error
-    from the log, run through `_redact` so the excerpt carries no HA URL/host, no
-    other URL, no token-shaped string, no Windows user path, and no IP address.
-    For the user to review and submit themselves (their GitHub login creates it;
-    nothing is sent automatically)."""
+    """A GitHub "new issue" URL prefilled with the most recent error from the log,
+    redacted with `_redact`. The user reviews and submits it from their own
+    account; nothing is sent automatically."""
     log_dir = log_dir or LOG_PATH.parent
     candidates = [log_dir / "assistkey.log", log_dir / "assistkey.log.1"]
     raw = find_error_excerpt(candidates)
@@ -245,7 +234,7 @@ def _install_hooks() -> None:
 
 
 def setup(path: Path = LOG_PATH, capture_streams: bool = True, install_hooks: bool = True) -> None:
-    """Wire the rotating file log + crash hooks. Best-effort — never blocks startup."""
+    """Set up the log file and crash hooks. Never raises, so it can't block startup."""
     try:
         log.setLevel(logging.DEBUG)
         log.handlers.clear()

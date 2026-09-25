@@ -11,7 +11,7 @@ def test_launch_command_points_at_vbs():
 
 
 def test_launch_command_frozen_points_at_exe(monkeypatch, tmp_path):
-    # A frozen build has no VBS beside a downloaded exe — launch the exe directly.
+    # A downloaded exe has no VBS next to it, so register the exe itself.
     exe = tmp_path / "AssistKey.exe"
     exe.write_bytes(b"")
     monkeypatch.setattr(sys, "frozen", True, raising=False)

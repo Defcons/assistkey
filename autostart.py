@@ -1,8 +1,8 @@
-r"""Start-at-login toggle via the per-user Run key (no admin, no extra deps).
+r"""Start-at-login toggle using the per-user Run registry key (no admin needed).
 
-Explorer launches everything under HKCU\...\Run at sign-in. We point ours at the
-silent VBS launcher through wscript, so login starts the tray app with no console
-window — the same thing double-clicking AssistKey.vbs does.
+Windows starts everything under HKCU\...\Run at sign-in. The packaged exe is
+registered directly. From source we register the silent VBS launcher via
+wscript, the same as double-clicking AssistKey.vbs.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ _APP_NAME = "AssistKey"
 
 
 def _launch_command() -> str:
-    """Registry launch command, quoted. Frozen build: the windowed exe itself (no
-    console, so no VBS wrapper needed). Source run: the silent `wscript AssistKey.vbs`."""
+    """The quoted command for the registry: the exe itself in the packaged build
+    (it has no console), or `wscript AssistKey.vbs` when running from source."""
     if getattr(sys, "frozen", False):
         return f'"{Path(sys.executable).resolve()}"'
     vbs = paths.app_dir() / "AssistKey.vbs"
@@ -63,6 +63,5 @@ def set_enabled(enabled: bool) -> None:
                 except FileNotFoundError:
                     pass  # already absent
     except OSError:
-        # Still best-effort (Save must not fail over this), but no longer silent:
-        # the user ticked a box that then did nothing — leave a trace.
+        # Saving must not fail over this, but log it so it isn't silent.
         log.exception("could not update the start-at-login registry entry")

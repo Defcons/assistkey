@@ -1,6 +1,6 @@
 # OrientationMap — AssistKey
 
-_Last verified: 2026-08-29 — structural audit: 8 behavior fixes, hygiene batch, overlay.py split (settings.py + winscreen.py), pyproject (ruff+pytest config, ruff in CI)._
+_Last verified: 2026-09-25 — plain-voice pass: comments/docstrings rewritten (AST-verified no code change), README cut to ~550 words with AI disclosure, docs/README.md added._
 
 ## What this is
 A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hotkey → talk → release; always-on-top toast shows Listening → your words → the streaming reply, which is also spoken. Python 3.12+ / tkinter + customtkinter, asyncio HA WebSocket, pynput hotkey, pystray tray. Entry: `app.py` (run via `AssistKey.vbs` silent or `run.bat` with a console).
@@ -15,6 +15,7 @@ A Windows **system-tray push-to-talk app** for Home Assistant Assist. Hold a hot
 - Flat repo, ~6 modules at root; automated tests in `tests/`; screenshots in `docs/`.
 - Config + secrets in `config.json` (git-ignored — holds the HA token). Rotating log `assistkey.log` (+.1/.2/.3, git-ignored `assistkey.log*`) via `diag.py`.
 - Style: terse, purposeful docstrings; broad `except Exception  # noqa: BLE001` guards around anything cosmetic/best-effort so the UI/pump never wedges. Match it.
+- **Comments and public text are plain and short (the repo is public; its old voice got it called "AI slop").** A comment states the constraint the code can't show, in a sentence or two. NO dates, incident stories, "was:/used to", "probe-confirmed", doc-bible references (ResearchJournal/KnowledgeBase) or ALL-CAPS emphasis in code; that history belongs in the Journal and commit messages. No em-dashes in comments/docstrings. Commit messages: a subject line plus a few plain lines, not essays. README stays short and plain.
 
 ## Subsystem index
 - **App / wiring** — tray (icon reflects connected/active/disconnected; menu Settings/Stop/Open log/Quit), hotkey modes + barge-in, asyncio loop, single-instance, UI queue drain. Entry: `app.py` (`App`, `HotkeyListener`, `kill_previous_instances`). Threads + cross-thread rules: see KnowledgeBase §Architecture.

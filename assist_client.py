@@ -1,36 +1,31 @@
-"""Async Home Assistant Assist pipeline client for push-to-talk.
+"""Async client for the Home Assistant Assist pipeline, used for push-to-talk.
 
-Owns a persistent WebSocket connection to HA and runs one utterance at a time:
-capture mic audio while the hotkey is held, stream it into assist_pipeline,
-surface pipeline events to the UI via a callback, and play the TTS reply on the
-configured output device.
+Keeps one WebSocket connection to HA and runs one utterance at a time: records
+the mic while the hotkey is held, streams it to assist_pipeline, reports
+pipeline events to the UI and plays the spoken reply.
 
-UI-agnostic: it calls `self.ui((command, *args))` — the callback must be
-thread-safe (the mic level is emitted from the PortAudio callback thread; the
-app's is a queue.put). The app translates commands into overlay/tray updates:
-    ("assistant", name)             pipeline display name for the reply header
-    ("listening",)                  mic open, waiting for speech
-    ("level", v)                    mic peak 0..1 for the Listening meter (~10/s)
+The client never touches the UI directly. It calls `self.ui((command, *args))`,
+which must be thread-safe because the mic level is sent from the PortAudio
+callback thread. Commands:
+    ("assistant", name)             pipeline name for the reply header
+    ("listening",)                  mic open
+    ("level", v)                    mic peak 0..1 for the meter (~10/s)
     ("thinking",)                   key released, STT/LLM running
-    ("user_text", text)             final recognised speech
-    ("response_reset",)             assistant reply is about to stream
-    ("response_append", token)      a chunk of the assistant reply
-    ("response_final", text)        full reply (fallback if nothing streamed)
+    ("user_text", text)             recognised speech
+    ("response_reset",)             reply about to stream
+    ("response_append", token)      a chunk of the reply
+    ("response_final", text)        full reply, if nothing was streamed
     ("error", message)
-    ("done",)                       reply finished (audio played) -> fade out
-    ("status", text)                connection status (tray/debug)
+    ("done",)                       reply finished
+    ("status", text)                connection status for the tray tooltip
     ("connected",) / ("disconnected",)   tray icon colour
 
-Contract: ("done",) and ("error",) are the TERMINAL signals — they are what
-resumes wake-word listening and resets hotkey state, so every utterance path
-must end in exactly one of them (see the wake-balance landmine in
-OrientationMap). An ("error",) may also precede the ("done",) of the same run
-(a mid-run pipeline error, or a crash caught in _run_utterance); the app's
-handlers are idempotent, so the double reset is harmless.
+Every utterance ends with ("done",) or ("error",). The app uses those to resume
+the wake word and reset the hotkey. An error can arrive before the done of the
+same run, so the app's handlers are idempotent.
 
-`restart_utterance()` is the barge-in entry point: it cancels whatever's active
-(suppressing ITS ("done",) so it can't race the new run's ("listening",)) before
-starting fresh — see the class docstring on `request_cancel`.
+`restart_utterance()` is what the hotkey and wake word call: it cancels any
+active run without letting that run's ("done",) through, then starts a new one.
 """
 
 from __future__ import annotations
@@ -51,9 +46,8 @@ log = logging.getLogger("assistkey.client")
 
 SAMPLE_RATE = 16000
 BLOCK = 1600  # 100 ms at 16 kHz
-SILENCE_PEAK = 0.005  # 0..1 loudest-sample floor; a whole hold below it = no real audio
-                      # (mic off / unplugged / muted). Deliberately low: a muted device gives
-                      # ~0, so this catches it without tripping on a quiet-but-working mic.
+SILENCE_PEAK = 0.005  # a hold whose loudest sample stays below this is silence (mic off
+                      # or muted). Kept low so a quiet but working mic never trips it.
 COMPLETION_TIMEOUT = 60   # s after release to get run-end before forcing the popup away
 MAX_RECORD = 120          # s hard cap on recording (protects against a missed key-release)
 CONVERSATION_TTL = 60     # s a conversation_id is reused so follow-ups keep context
@@ -76,11 +70,8 @@ def _ws_is_open(ws) -> bool:
 
 
 class AuthFailed(RuntimeError):
-    """Home Assistant answered and REJECTED the credentials. Unlike a network
-    failure, no amount of retrying can fix this — only a new token can, so the
-    UI should tell the user what to DO instead of claiming to be reconnecting.
-    (2026-09-12: a server-side token revocation left the app silently
-    auth-looping for a day with only "RuntimeError" in the log.)"""
+    """HA rejected the token. Retrying can't fix that, so the UI asks the user
+    for a new token instead of saying it's reconnecting."""
 
 
 async def test_credentials(url: str, token: str) -> tuple[bool, str]:
@@ -145,15 +136,13 @@ def _list_devices(cap: str) -> list[tuple[int, str]]:
 
 
 class _MicDSP:
-    """Optional in-app conditioning applied to each 16-bit mic block BEFORE it is
-    streamed to Home Assistant: a linear boost (from dB, hard-clipped so it can't
-    overflow int16) and an optional 1st-order high-pass / DC-blocker (~80 Hz) that
-    trims mains hum, rumble and DC bias.
+    """Optional processing of each 16-bit mic block before it goes to HA: a gain
+    boost (clipped so it can't overflow int16) and an optional ~80 Hz high-pass
+    that removes hum and DC offset.
 
-    STT runs on HA (Whisper etc.), which is noise-robust and prefers natural audio —
-    so this deliberately does LEVEL + gentle cleanup only, never aggressive
-    denoising (which tends to hurt recognition). Stateful across blocks (the filter
-    carries memory); one instance per utterance.
+    HA's speech-to-text copes well with noise and prefers natural audio, so this
+    only fixes level and hum. It does no noise suppression. The filter keeps
+    state between blocks, so use one instance per utterance.
     """
     _HP_A = 0.969   # ~80 Hz cutoff at 16 kHz for the 1st-order high-pass
 
@@ -173,7 +162,7 @@ class _MicDSP:
         if self._highpass:
             a, x1, y1 = self._HP_A, self._x1, self._y1
             out = []
-            for xi in x.tolist():          # ~1600 samples/block, 10/s — cheap
+            for xi in x.tolist():          # ~1600 samples per block, 10 blocks/s: cheap
                 y1 = xi - x1 + a * y1      # DC-blocker: ~unity passband gain
                 x1 = xi
                 out.append(y1)
@@ -216,14 +205,13 @@ class AssistClient:
         return self._next_id
 
     async def force_reconnect(self):
-        """Reconnect ONLY if the credentials changed. A plain settings save (popup
-        timing, hotkey, wake word, …) must not drop a healthy connection — doing so
-        made every Save strand the app for seconds while it reconnected."""
+        """Reconnect only if the URL or token changed, so saving other settings
+        doesn't drop a working connection."""
         url, token = self.config.credentials()
         url = url.rstrip("/")
         if _ws_is_open(self.ws) and url == self.server and token == self.token:
-            return  # nothing connection-relevant changed; keep the live socket
-        self._retry_kick.set()  # if _reconnect is mid-backoff, retry with the new creds NOW
+            return
+        self._retry_kick.set()  # wake _reconnect if it's waiting out a backoff
         if self.ws is not None:
             try:
                 await self.ws.close()
@@ -252,22 +240,20 @@ class AssistClient:
             await ws.send(json.dumps({"type": "auth", "access_token": self.token}))
             reply = json.loads(await ws.recv())
             if reply.get("type") != "auth_ok":
-                # Set the flag HERE, not in a caller: bootstrap's startup loop and
-                # pump's _reconnect both funnel through connect(), and a hotkey
-                # press must say "fix your token" in BOTH auth-dead states.
+                # Set here rather than in the callers, so both the startup loop
+                # and _reconnect know the token was rejected.
                 self._auth_failed = True
                 raise AuthFailed(f"Auth failed: {reply}")
         except BaseException:
-            # Close the just-opened socket on ANY failure (auth error, cancel, bad
-            # handshake) so a failed connect doesn't leak an open connection each
-            # retry — and only publish self.ws once it's fully authenticated.
+            # Close the new socket on any failure so retries don't leak
+            # connections. self.ws is only set once auth succeeds.
             try:
                 await ws.close()
             except Exception:  # noqa: BLE001
                 pass
             raise
         self.ws = ws
-        self._auth_failed = False   # credentials proven good again
+        self._auth_failed = False
         log.info("connected to Home Assistant %s at %s", reply.get("ha_version"), self.server)
         self.ui(("status", f"Connected (HA {reply.get('ha_version')})"))
         self.ui(("connected",))
@@ -275,8 +261,8 @@ class AssistClient:
     async def _request_once(self, payload: dict) -> dict:
         """Send a command and read the socket directly for its reply.
 
-        Used during connect/reconnect, BEFORE pump() owns the socket, so it must
-        not rely on the id-routing that pump provides.
+        Used while connecting, before pump() is reading the socket, so it can't
+        rely on pump's id routing.
         """
         msg_id = self.next_id()
         await self.ws.send(json.dumps({"id": msg_id, **payload}))
@@ -286,11 +272,9 @@ class AssistClient:
             msg = json.loads(raw)
             if msg.get("id") == msg_id:
                 return msg
-            # Not ours — but maybe an in-flight utterance's. Right after a
-            # reconnect the socket is OPEN (a hotkey press can start a run) while
-            # pump is still parked in _reconnect running THIS method; discarding
-            # here would eat that run's events and dead-end it into the 60 s
-            # watchdog.
+            # Not our reply. It may belong to an utterance that started right
+            # after a reconnect, while pump is still waiting on this call, so
+            # route it instead of dropping it.
             q = self._routes.get(msg.get("id"))
             if q is not None:
                 q.put_nowait(msg)
@@ -303,19 +287,13 @@ class AssistClient:
             self.preferred_pipeline = res["result"].get("preferred_pipeline")
 
     async def pump(self):
-        """Route incoming text frames to whichever call/utterance awaits that id.
+        """Route incoming messages to whichever utterance is waiting for that id.
 
-        The `async for` ends on EITHER a clean close or an error close, and BOTH
-        must reconnect. A clean close (HA closing with a normal 1000 code — on a
-        restart, update, or idle timeout) does NOT raise: the websockets async
-        iterator stops silently. So there is no exception to catch — the loop just
-        falls through to the reconnect below. Missing this was a real bug: `while
-        True` would immediately re-enter `async for` on the now-dead socket, which
-        also returns instantly, giving a tight no-await loop that pegged the
-        asyncio thread at 100% CPU. Because that spin holds the GIL, pynput's
-        keyboard-hook callback fell behind and ALL Windows input lagged. Always
-        reconnecting (which awaits) makes a spin impossible. See ResearchJournal
-        2026-08-27.
+        `async for` over a websockets connection ends silently, with no
+        exception, when HA closes normally (a restart, for example). Both that
+        and an error close must lead to a reconnect. Going back into `async for`
+        on the closed socket returns instantly, which turns into a busy loop that
+        holds the GIL and makes all keyboard input lag.
         """
         while True:
             try:
@@ -329,16 +307,15 @@ class AssistClient:
                     q = self._routes.get(msg.get("id"))
                     if q is not None:
                         await q.put(msg)
-                reason = "closed cleanly"   # async for ended with NO exception
+                reason = "closed cleanly"   # async for ended without an exception
             except (websockets.ConnectionClosed, OSError) as exc:
                 reason = exc.__class__.__name__
             log.warning("connection %s; reconnecting", reason)
             self.ui(("disconnected",))
             self.ui(("status", f"Disconnected ({reason}); reconnecting…"))
-            # Fail any in-flight utterance NOW. HA lost its runs with the socket, so
-            # no more events will ever arrive for these ids — without this, a run
-            # caught mid-flight sits silently in "Thinking…" until the 60 s
-            # completion watchdog, with wake paused the whole time.
+            # HA drops its pipeline runs with the connection, so no more events
+            # will come for these ids. Fail them now instead of leaving them to
+            # the completion timeout.
             for q in list(self._routes.values()):
                 q.put_nowait({"type": "__disconnected__"})
             await self._reconnect()   # awaits (connect + backoff sleep) -> never spins
@@ -347,20 +324,19 @@ class AssistClient:
         delay = 1
         while True:
             try:
-                await self.connect()          # try immediately — a healthy reconnect is instant
+                await self.connect()          # no delay before the first attempt
                 await self.load_pipelines()
                 return
             except Exception as exc:  # noqa: BLE001 - keep retrying with backoff
-                # Log the MESSAGE, not just the class — "RuntimeError" alone made a
-                # day-long auth failure indistinguishable from a network blip.
+                # Include the message: the class name alone can't tell a rejected
+                # token from a network error.
                 log.warning("reconnect failed (%s: %s); retrying in %ds",
                             exc.__class__.__name__, exc, delay)
                 if isinstance(exc, AuthFailed):   # connect() has set _auth_failed
                     self.ui(("status", "Authentication failed — create a new token in "
                                        "Home Assistant and update it in Settings"))
-                # Interruptible backoff: a Settings save with corrected credentials
-                # kicks this (force_reconnect) so the user isn't stuck watching
-                # "Disconnected" for up to 30 s after fixing a typo'd URL.
+                # force_reconnect sets _retry_kick after a settings save, which
+                # ends this wait early.
                 self._retry_kick.clear()
                 try:
                     await asyncio.wait_for(self._retry_kick.wait(), delay)
@@ -377,19 +353,18 @@ class AssistClient:
         return self._active
 
     def request_cancel(self, suppress_done: bool = False):
-        """Barge-in: stop any TTS playback now and end the in-flight run. Any thread.
+        """Stop playback and end the current run. Safe to call from any thread.
 
-        suppress_done=True additionally skips the terminal ("done",) signal for
-        THIS cancelled run — used by `restart_utterance`, where a new utterance is
-        about to replace it immediately: letting the old run's ("done",) through
-        would race the new run's ("listening",) and could reset hotkey/wake state
-        mid-gesture (see KnowledgeBase). Plain callers (tray Stop, clicking the
-        popup) don't pass this — there the normal done/dismiss is exactly right.
+        With suppress_done=True the cancelled run doesn't send ("done",).
+        restart_utterance uses this because a new run starts straight away, and a
+        late ("done",) would reset the hotkey and wake state in the middle of it.
+        Stop and clicking the popup use the default, where the normal ("done",)
+        is what dismisses the popup.
         """
         if suppress_done:
             self._suppress_next_done = True
         try:
-            sd.stop()  # unblock _play's sd.wait() immediately
+            sd.stop()  # stop playback now
         except Exception:  # noqa: BLE001
             pass
         loop = self.loop
@@ -397,9 +372,8 @@ class AssistClient:
             loop.call_soon_threadsafe(self._cancel.set)
 
     def _emit_done(self):
-        """Fire the terminal ("done",) signal, unless it was suppressed for an
-        internal restart hand-off — consumed once, so the NEXT genuine completion
-        emits normally."""
+        """Send ("done",) unless a restart suppressed it. The suppression is used
+        up by one call."""
         if self._suppress_next_done:
             self._suppress_next_done = False
             log.info("done suppressed (restart hand-off)")
@@ -415,9 +389,8 @@ class AssistClient:
 
     @staticmethod
     def _wants_follow_up(io: dict, reply_text: str) -> bool:
-        """Follow-up is warranted if HA flags continue_conversation, OR the reply is
-        itself a question (e.g. 'What did you mean?') — many agents ask a clarifying
-        question without setting the flag."""
+        """Listen again if HA sets continue_conversation or the reply ends with a
+        question mark. Many agents ask a clarifying question without the flag."""
         flagged = bool(io.get("continue_conversation")
                        or io.get("response", {}).get("continue_conversation"))
         return flagged or reply_text.strip().endswith("?")
@@ -426,14 +399,11 @@ class AssistClient:
         if self._active:
             return  # one already running; it will emit its own ("done",)
         if not _ws_is_open(self.ws):
-            # Not connected yet, or mid-reconnect (a closed, non-None socket).
-            # Decline gracefully. We must still emit a terminal signal: the caller
-            # may have paused wake-word listening, and only ("done",)/("error",)
-            # resumes it — otherwise wake stays paused until the app is restarted.
+            # Not connected, or mid-reconnect. Still send a terminal signal: the
+            # caller may have paused the wake word, and only done/error resumes it.
             if notify_unavailable:
                 if self._auth_failed:
-                    # "Reconnecting…" would be a lie here — retrying can't fix a
-                    # revoked token. Tell the user the one thing that will.
+                    # Retrying won't fix a rejected token, so don't say "Reconnecting".
                     self.ui(("error", "Authentication failed — create a new token in "
                                       "Home Assistant and update it in Settings."))
                 else:
@@ -456,27 +426,19 @@ class AssistClient:
             self._idle.set()
 
     async def restart_utterance(self, notify_unavailable: bool = False):
-        """Barge-in entry point: if a reply is currently active (including mid
-        TTS playback — `is_active()` stays true for the whole utterance), cancel
-        it WITHOUT letting its normal ("done",) fire, wait for it to actually wind
-        down, then start fresh. This is what makes pressing the hotkey always land
-        the user in Listening, instead of `start_utterance` silently no-op'ing
-        because `_active` is still true.
+        """Cancel any active run (including one that is still speaking), wait for
+        it to finish, then start listening. The cancelled run's ("done",) is
+        suppressed so it can't reset the new run's state. A plain
+        start_utterance would do nothing while a reply is still active.
         """
         if self._active:
             self.request_cancel(suppress_done=True)
             try:
                 await asyncio.wait_for(self._idle.wait(), timeout=5)
             except asyncio.TimeoutError:
-                # The old utterance did NOT wind down in time — almost always
-                # because it's stuck in a slow TTS fetch (`_play`'s urlopen, which
-                # sd.stop() can't interrupt). We are NOT going to replace it now, so
-                # we must NOT swallow its terminal ("done",): that signal is the ONLY
-                # thing that resumes wake-word listening and resets hotkey state. Leave
-                # `_suppress_next_done` armed and the old run's done would be eaten →
-                # wake stuck paused forever (see ResearchJournal 2026-08-27 audit).
-                # Un-arm it and let the old run resolve normally (its queued __cancel__
-                # ends it once the fetch returns); the barge-in becomes a plain cancel.
+                # The old run didn't stop in time (usually a slow TTS fetch). We
+                # won't replace it, so let its ("done",) through: that is what
+                # resumes the wake word and resets the hotkey.
                 log.warning("restart_utterance: previous utterance stuck (>5s, likely a slow "
                             "TTS fetch); letting it resolve normally instead of suppressing its done")
                 self._suppress_next_done = False
@@ -489,17 +451,16 @@ class AssistClient:
         finished = asyncio.Event()
 
         dsp = _MicDSP(self.config.mic_gain_db, self.config.mic_highpass)
-        peak_level = 0.0  # loudest processed sample over the hold (0..1); ~0 = mic off/muted/too quiet
+        peak_level = 0.0  # loudest processed sample in this hold, 0..1
 
         def on_audio(indata, frames, t, status):
             nonlocal peak_level
             arr = np.frombuffer(bytes(indata), dtype=np.int16)
             if dsp.active:
-                arr = dsp.process(arr)   # boost / high-pass BEFORE streaming to HA
+                arr = dsp.process(arr)   # before sending to HA
             audio_q.put(arr.tobytes())
-            # Emit a mic level (0..1 peak) for the Listening meter — on the PROCESSED
-            # signal, so the bar reflects what HA receives (dial the boost by it). ~10/s.
-            # Also track the loudest sample of the whole hold, to catch a silent mic.
+            # The meter uses the processed signal, so it shows what HA receives.
+            # peak_level keeps the loudest block, to detect a silent mic.
             if arr.size:
                 lvl = float(np.abs(arr).max()) / 32768.0
                 if lvl > peak_level:
@@ -538,13 +499,9 @@ class AssistClient:
         try:
             await self.ws.send(json.dumps(run_opts))
         except Exception:
-            # The socket can die between start_utterance's open-check and here (this
-            # send is the first await after that check, and a send on a dying
-            # connection raises). Nothing owns the stream yet — forward_audio
-            # doesn't exist — so without this cleanup the mic stays HOT forever
-            # (still capturing) and the routes entry leaks. Probe-confirmed
-            # 2026-08-29. The re-raise surfaces as a normal ("error",) terminal
-            # via start_utterance's backstop, so hotkey/wake state still resets.
+            # The socket can close between the open check in start_utterance and
+            # this send. forward_audio hasn't started yet, so nothing else would
+            # stop the mic stream or remove the route.
             try:
                 stream.stop()
                 stream.close()
@@ -560,14 +517,13 @@ class AssistClient:
 
         async def watch_release():
             await self._release.wait()
-            self.ui(("thinking",))  # key released -> Listening popup out, Thinking popup in
+            self.ui(("thinking",))  # key released
             stop_capture.set()
             if peak_level < SILENCE_PEAK:
-                # The mic delivered (near-)silence the WHOLE hold — off / unplugged / muted,
-                # or the user far too quiet for STT to stand a chance. Catch it here instead
-                # of shipping silence to HA and waiting several seconds for it to come back
-                # with "no text recognized". (A dead device that never fires the callback
-                # leaves peak_level at 0, so this covers that too.)
+                # Silence for the whole hold (mic off or muted). Report it now
+                # rather than sending silence to HA and waiting for "no text
+                # recognized". A device that never delivers audio leaves
+                # peak_level at 0 as well.
                 await events.put({"type": "__nomic__"})
 
         async def forward_audio():
@@ -611,8 +567,7 @@ class AssistClient:
                 stop_capture.set()
 
         async def completion_watchdog():
-            # After recording ends, the pipeline must finish within a bound;
-            # otherwise force the utterance to resolve so the popup never hangs.
+            # Once recording ends, give the pipeline COMPLETION_TIMEOUT to finish.
             await stop_capture.wait()
             try:
                 await asyncio.wait_for(finished.wait(), timeout=COMPLETION_TIMEOUT)
@@ -638,9 +593,7 @@ class AssistClient:
                                       "and unmuted, then try again."))
                     break
                 if msg.get("type") == "__disconnected__":
-                    # pump lost the socket: HA lost this run with it — no more
-                    # events will ever arrive for our msg_id. Fail fast instead of
-                    # sitting in "Thinking…" until the completion watchdog.
+                    # pump lost the connection, and HA dropped this run with it.
                     self.ui(("error", "Lost connection to Home Assistant"))
                     break
                 if msg.get("type") == "__timeout__":
@@ -700,14 +653,10 @@ class AssistClient:
                 elif etype == "run-end":
                     log.info("run-end received")
                     break
-        except Exception as exc:  # noqa: BLE001 - a raiser mid-run (e.g. an unexpected
-            # HA event shape) must resolve with the terminal signals in the RIGHT
-            # order and respect barge-in suppression. Handling it here (instead of
-            # letting start_utterance catch it after the finally) means the
-            # ("error",) precedes the finally's ("done",) — and a run that was
-            # cancelled/superseded stays silent, so a late crash from the OLD run
-            # can't reset hotkey/wake state mid-gesture under the NEW run (the
-            # same race class the done-channel suppression already closed).
+        except Exception as exc:  # noqa: BLE001 - e.g. an unexpected HA event shape
+            # Handled here so the error is sent before the finally's ("done",),
+            # and not at all if this run was cancelled: a late error would reset
+            # the next run's hotkey and wake state.
             log.exception("utterance failed")
             self._follow_up_requested = False   # a crashed run must not auto-listen
             if not self._cancel.is_set():
@@ -716,11 +665,10 @@ class AssistClient:
             finished.set()
             stop_capture.set()
             self._routes.pop(msg_id, None)
-            # BOUND this wait. forward_audio's teardown — sd stream stop/close on a device
-            # that's gone, or a final ws.send on a half-open socket — can hang. If it does,
-            # abandon it: the ("done",) + _active/_idle reset (in start_utterance) below MUST
-            # still run, or the state stays stuck and every later hotkey press dead-ends in
-            # restart_utterance's idle-wait (see ResearchJournal 2026-08-27 mic-hang).
+            # Don't wait on forward_audio forever: stopping a stream on a device
+            # that has gone away, or a last send on a half-open socket, can hang.
+            # If it does, abandon it so ("done",) is still sent and
+            # start_utterance resets _active. Otherwise the hotkey stays dead.
             try:
                 _, pending = await asyncio.wait({forwarder}, timeout=3)
                 if pending:
@@ -731,7 +679,7 @@ class AssistClient:
                 pass
             for task in (watcher, capper, completer, canceller):
                 task.cancel()
-            self._emit_done()  # fires -> popup dismisses; suppressed once for a restart hand-off
+            self._emit_done()
 
     async def _play(self, tts_output: dict):
         url = tts_output["url"]
@@ -743,21 +691,18 @@ class AssistClient:
             with urllib.request.urlopen(req, timeout=TTS_FETCH_TIMEOUT) as resp:
                 data = resp.read()
             if cancel.is_set():
-                return  # barged in during the fetch — don't start playback at all
+                return  # cancelled during the fetch
             decoded = miniaudio.decode(data, output_format=miniaudio.SampleFormat.SIGNED16)
             samples = np.frombuffer(decoded.samples, dtype=np.int16)
             if decoded.nchannels > 1:
                 samples = samples.reshape(-1, decoded.nchannels)
             if cancel.is_set():
-                return  # barged in during the decode — same
+                return  # cancelled during the decode
             sd.play(samples, decoded.sample_rate, device=self.config.speaker_device)
-            # NOT a blind sd.wait(): request_cancel()'s sd.stop() can land in the
-            # decode window ABOVE — i.e. before this play even starts — and its
-            # cancel flag is set via call_soon_threadsafe, so it can trail the
-            # pre-play check too. A bare wait() would then play the whole stale
-            # reply over the user's new Listening. Poll the flag alongside the
-            # stream instead; audio still halts instantly on a barge-in (sd.stop
-            # from request_cancel), this loop just notices within ~50 ms.
+            # Poll instead of sd.wait(). request_cancel's sd.stop() can run before
+            # this play starts, and the cancel flag arrives via the event loop, so
+            # it can also miss the check above. A plain wait() would then play
+            # the whole old reply.
             while True:
                 if cancel.is_set():
                     sd.stop()
@@ -769,20 +714,16 @@ class AssistClient:
                     return      # stream already closed/stopped
                 time.sleep(0.05)
 
-        # Race the fetch/playback against a barge-in. `sd.stop()` only unblocks the
-        # PLAYBACK (`sd.wait`), not the `urlopen` fetch — so without this, a barge-in
-        # during a slow fetch left the utterance loop stuck at `await self._play` for
-        # up to the whole timeout (unresponsive barge-in + lingering popup). Now a
-        # barge-in returns _play immediately; the executor finishes its soon-to-time-
-        # out fetch in the background, sees `cancel.is_set()`, and skips playback — a
-        # short-lived, harmless orphan.
+        # Race the fetch and playback against a cancel. sd.stop() can't interrupt
+        # the urlopen fetch, so on a cancel we return right away and let the
+        # fetch finish in the background; it then sees the flag and skips playback.
         loop = asyncio.get_running_loop()
         fut = loop.run_in_executor(None, fetch_decode_play)
         waiter = asyncio.ensure_future(cancel.wait())
         try:
             await asyncio.wait({fut, waiter}, return_when=asyncio.FIRST_COMPLETED)
             if fut.done():
-                await fut  # completed on its own — surface any fetch/decode/play error
+                await fut  # finished normally: raise any error it hit
             else:
                 log.info("tts playback cancelled during fetch")
                 fut.add_done_callback(self._retire_orphan_play)

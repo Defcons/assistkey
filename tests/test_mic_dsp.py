@@ -20,7 +20,7 @@ def test_gain_boosts_amplitude():
 
 
 def test_gain_hard_clips_instead_of_overflowing():
-    # 20000 × ~4 (+12 dB) = ~80000; must clip to the int16 range, NOT wrap negative.
+    # 20000 x ~4 (+12 dB) = ~80000; must clip to the int16 range, not wrap negative.
     dsp = _MicDSP(12.0, False)
     out = dsp.process(np.full(64, 20000, dtype=np.int16))
     assert out.max() == 32767            # clipped, not wrapped

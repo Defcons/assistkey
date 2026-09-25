@@ -37,7 +37,7 @@ def is_protected(value: str) -> bool:
 
 
 def protect(secret: str) -> str:
-    """Return the secret encrypted as ``dpapi:<base64>`` — or unchanged on failure."""
+    """Return the secret encrypted as ``dpapi:<base64>``, or unchanged on failure."""
     if not secret or is_protected(secret):
         return secret
     try:
@@ -59,7 +59,7 @@ def protect(secret: str) -> str:
 
 
 def unprotect(stored: str) -> str:
-    """Return the plaintext for a ``dpapi:`` value — or the input unchanged."""
+    """Return the plaintext for a ``dpapi:`` value, or the input unchanged."""
     if not is_protected(stored):
         return stored
     try:

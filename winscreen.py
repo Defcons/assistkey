@@ -1,9 +1,8 @@
-"""Windows monitor/work-area + dark-titlebar helpers (ctypes, no dependencies).
+"""Windows helpers for monitor work areas and dark title bars (ctypes only).
 
-Shared by the popup overlay (which places itself on a chosen monitor) and the
-settings dialog (which caps its height to the work area). Everything degrades
-gracefully off-Windows: helpers return None / a sane default and the dark
-titlebar is simply skipped.
+Used by the popup (to place itself on a monitor) and the settings dialog (to fit
+the screen). Off Windows they return None or a default, and the dark title bar
+is skipped.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ class _MONITORINFO(ctypes.Structure):
 
 
 def apply_dark_titlebar(win):
-    """Make a window's native title bar dark (Windows DWM) — no white bar."""
+    """Make a window's native title bar dark (Windows DWM)."""
     try:
         win.update_idletasks()
         hwnd = ctypes.windll.user32.GetParent(win.winfo_id())

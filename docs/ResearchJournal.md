@@ -797,3 +797,23 @@ at the flip instant). Profiling the remaining slowness then caught the real hog:
 scrollbar re-enters layout on every `set`. Replaced with `_ScrollBody` (plain canvas + lazy
 dark CTkScrollbar on the capped path only), which also deleted both CTk-internals reaches from
 2026-08-27. Capped path re-verified: caps, Save mapped, wheel scrolls, dark bar. 82 tests.
+
+---
+
+## 2026-09-25 — Plain-voice pass (the Reddit "AI slop" comment)
+
+The only Reddit reply was "Vibe coded slop. Even the post is giving ai slop vibes".
+Measured what a visitor sees: the post, then a README of 1,625 words with 40 em-dashes
+and 66 bold spans, agent notes in `docs/`, and code comments with 131 em-dashes and dated
+incident stories ("Probe-confirmed 2026-08-29", "Field report"). The logic wasn't the
+problem; the voice was.
+
+Changes: rewrote every comment/docstring to state the constraint only (16 files, -151
+lines; an AST comparison against HEAD proved no executable code changed; 82 tests pass).
+README cut to ~550 plain words with an honest AI-assistance section. Added
+`docs/README.md` explaining the notes. Convention recorded in OrientationMap. Kept the
+Claude co-author trailers on all commits: hiding the AI use would be worse than the tell.
+
+Found on the way: the README and the Server URL tooltip claimed HTTPS was required
+because "browsers block mic capture over http". False for this app (the mic is recorded
+locally; `_ws_url` maps http to ws). Fixed separately.

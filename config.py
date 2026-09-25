@@ -1,11 +1,10 @@
-"""Persistent settings for the AssistKey tray app.
+"""Settings for the tray app, stored in config.json next to the app.
 
-Stored as config.json next to this file: the hotkey (a set of keys that must all
-be held), trigger mode, mic / speaker device indices, the chosen HA Assist
-pipeline, wake-word options and popup preferences — plus the Home Assistant URL
-and long-lived token. `credentials()` resolves the URL/token from config first,
-falling back to the HASS_SERVER / HASS_TOKEN environment variables. Because the
-token is written here, config.json is sensitive and git-ignored.
+Holds the hotkey (a set of keys that must all be held), trigger mode, audio
+devices, HA pipeline, wake word and popup options, plus the Home Assistant URL
+and token. `credentials()` uses the values in config.json first and falls back
+to the HASS_SERVER / HASS_TOKEN environment variables. The token is stored
+encrypted, and config.json is git-ignored.
 """
 
 from __future__ import annotations
@@ -64,13 +63,13 @@ class Config:
     trigger_mode: str = "hold"             # "hold" (press-and-hold) or "toggle" (tap on/off)
     wake_enabled: bool = False             # listen for a wake word (openWakeWord)
     wake_word: str = "hey_jarvis"          # openWakeWord model name
-    wake_sensitivity: float = 0.5          # 0–1 detection threshold (higher = stricter)
+    wake_sensitivity: float = 0.5          # 0-1 detection threshold (higher = stricter)
     mic_device: int | None = None          # sounddevice index; None = default
     mic_gain_db: float = 0.0               # in-app mic boost in dB before streaming; 0 = off
     mic_highpass: bool = False             # gentle high-pass/DC-blocker to trim hum & rumble
     speaker_device: int | None = None      # sounddevice index; None = default
     pipeline: str | None = None            # HA pipeline id; None = preferred
-    dismiss_seconds: float = 2.0           # seconds the popup lingers AFTER the reply is spoken
+    dismiss_seconds: float = 2.0           # seconds the popup stays after the reply is spoken
     popup_monitor: str = "primary"         # "primary" | "cursor" | monitor index ("0", "1", …)
     follow_up_enabled: bool = False        # auto-listen for a follow-up when HA asks a question
 
@@ -102,15 +101,13 @@ class Config:
         return cls()
 
     def save(self) -> None:
-        # asdict, not a hand-written mirror of the field list: forgetting to add a
-        # new field here failed SILENTLY (it constructed, showed in Settings, and
-        # just never persisted). Every dataclass field round-trips automatically;
-        # only the token needs special handling (encrypted at rest).
+        # asdict, so a new field is saved without touching this method. Only the
+        # token needs special handling.
         data = dataclasses.asdict(self)
         data["ha_token"] = dpapi.protect(self.ha_token)  # encrypted at rest (DPAPI, per-user)
-        # Atomic write: a truncating write interrupted mid-flight (this app
-        # force-kills older instances at startup) would corrupt config.json and
-        # lose the token. Write a temp file, then rename over the target.
+        # Write a temp file and rename it over the target, so an interrupted write
+        # (a new instance kills the old one at startup) can't corrupt config.json
+        # and lose the token.
         tmp = CONFIG_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         os.replace(tmp, CONFIG_PATH)

@@ -1,14 +1,11 @@
-"""Always-on-top toast popup overlay (tkinter).
+"""Always-on-top popup overlay (tkinter).
 
-The Overlay shows a sequence of popups centred at the bottom-middle of whichever
-monitor the cursor is on: Listening… → Thinking… → the reply. Each popup slides
-up from the bottom as it appears and slides back down as it leaves; states
-replace one another (the old popup slides out, the new one slides in). All public
-methods must be called on the Tk main thread (the app drains a queue there).
+Shows a sequence of popups at the bottom centre of the chosen monitor:
+Listening, Thinking, then the reply. Each one slides up as it appears and
+slides down as it leaves. All public methods must be called on the Tk main
+thread; the app routes everything through a queue for this.
 
-The settings dialog lives in settings.py (split 2026-08-29 — this file is the
-stable, landmine-dense animation code; that one grows with every new setting);
-SettingsDialog is re-exported here for compatibility.
+The settings dialog lives in settings.py. SettingsDialog is re-exported here.
 """
 
 from __future__ import annotations
@@ -26,21 +23,21 @@ from winscreen import list_monitors, monitor_workarea_at, primary_workarea
 log = logging.getLogger("assistkey.overlay")
 
 
-MAGIC = "#ff00ff"          # transparent knock-out colour for rounded corners
-CARD = "#20242f"           # slightly warmer/softer card
+MAGIC = "#ff00ff"          # transparent key colour for the rounded corners
+CARD = "#20242f"
 BORDER = "#333a4d"
-TITLE_COL = "#c9d0da"      # softened (was near-white, too harsh)
-ACCENT = "#93b7f2"         # a touch softer blue
+TITLE_COL = "#c9d0da"
+ACCENT = "#93b7f2"
 MUTED = "#9aa0a6"
-TEXT = "#d6dce4"           # soft light-grey reply text, gentler contrast
-ERROR_COL = "#f0a6a0"      # softer red
-REVEAL_FROM = "#2b303c"    # colour the reply fades UP from (near the card)
+TEXT = "#d6dce4"           # reply text
+ERROR_COL = "#f0a6a0"
+REVEAL_FROM = "#2b303c"    # colour the reply fades in from
 
 WIDTH = 620
 PAD = 24
-MARGIN = 44                # gap above the taskbar at rest
+MARGIN = 44                # gap above the taskbar
 SLIDE = 40                 # px the popup travels while sliding in/out
-APPEAR_MS = 300            # gentler entrance
+APPEAR_MS = 300
 VANISH_MS = 180
 
 FONT_LABEL = ("Segoe UI Semibold", 10)
@@ -96,7 +93,7 @@ class Overlay:
         self._target = HIDDEN
         self._user_text = ""
         self._response = ""
-        self._assistant = "Assistant"  # reply label — set from the HA pipeline name
+        self._assistant = "Assistant"  # reply header, set from the HA pipeline name
         self._dots = 0
         self._pulse = 0
         self._h = 0
@@ -138,8 +135,8 @@ class Overlay:
         self._enter(LISTENING)
 
     def set_level(self, v):
-        """Feed the Listening mic meter (0..1). Attack fast, release slow. Updates
-        only the bar rectangle — no full redraw — so it stays cheap at ~10/s."""
+        """Update the mic meter (0..1): rises fast, falls slowly. Only the bar is
+        moved, not the whole popup redrawn, so ~10 updates/s stay cheap."""
         v = max(0.0, min(1.0, float(v)))
         self._level = v if v > self._level else self._level * 0.6 + v * 0.4
         if (self._state == LISTENING and self._shown and not self._animating
@@ -152,7 +149,7 @@ class Overlay:
                 pass
 
     def _on_click(self, _e=None):
-        # Click the popup to stop a run in progress (barge-in / dismiss a wake mis-fire).
+        # Clicking the popup stops the current run (also handy after a false wake).
         if self._state in (LISTENING, THINKING, RESPONSE) and self.on_cancel:
             self.on_cancel()
 
@@ -191,16 +188,12 @@ class Overlay:
 
     def error(self, message: str):
         self._response = message
-        self._touch()               # keep _last_change fresh so the watchdog measures from NOW
+        self._touch()               # the watchdog measures from here
         self._enter(ERROR)
-        # ALWAYS (re)start the dismiss timer here. ERROR otherwise self-schedules its
-        # dismiss ONLY from _finish (the transition path); a repeated error() on an
-        # already-settled error popup takes _enter's same-state _refresh branch, which
-        # skips _finish — so the previously-scheduled dismiss would be cancelled and
-        # never replaced, leaving the popup up until the ~22 s watchdog. Two quick
-        # ("error","Reconnecting…") events (e.g. hotkey pressed twice while HA is down)
-        # hit exactly this. _schedule_dismiss cancels-then-reschedules, so it's safe on
-        # both the transition path (redundant with _finish) and the settled path.
+        # Always restart the dismiss timer here. If an error popup is already
+        # showing, _enter just redraws it and skips _finish, which is where ERROR
+        # normally schedules its dismiss, so a second error would otherwise
+        # leave the popup up until the watchdog.
         self._schedule_dismiss()
 
     def done(self):
@@ -210,14 +203,11 @@ class Overlay:
         log.info("hide() firing (state=%s)", self._state)
         self._cancel_dismiss()
         self._enter(HIDDEN)
-        self._arm_hardhide(VANISH_MS + 500)  # guarantee withdrawal even if animation wedges
+        self._arm_hardhide(VANISH_MS + 500)  # hide it even if the animation gets stuck
 
     def _hard_hide(self):
-        """Unconditional reset: withdraw the window and clear all state.
-
-        The last line of defence against a stuck popup — never depends on the
-        transition state machine, so a wedged animation can't block it.
-        """
+        """Withdraw the window and reset all state without going through the
+        transition state machine, so a stuck animation can't block it."""
         self._cancel_slide()
         self._cancel_dismiss()
         self._stop_pulse()
@@ -252,18 +242,16 @@ class Overlay:
             self._hard_hide()
 
     def _watchdog(self):
-        # Force a stuck terminal popup away. Listening is exempt (a hold is
-        # legitimately open-ended); the pipeline's own watchdog ends that.
+        # Hide a popup that has been up far too long. Listening is exempt: a hold
+        # can last any length, and the client ends it.
         try:
             if self._shown and self._state != LISTENING:
                 limit = 90 if self._state == THINKING else self.config.dismiss_seconds + 20
                 elapsed = time.monotonic() - self._last_change
                 if elapsed > limit:
-                    # This should be rare: the normal dismiss timer (_schedule_dismiss)
-                    # is meant to have hidden it long before this fires. If you're
-                    # reading this in the log, THIS — not the configured dismiss delay —
-                    # is why the popup stayed up so long; it means "done" never reached
-                    # done()/hide() for this popup.
+                    # Should be rare: the dismiss timer normally hides the popup
+                    # long before this. Seeing it in the log means done()/hide()
+                    # was never reached for this popup.
                     log.warning("watchdog force-hiding a stuck %s popup after %.1fs (limit %.1fs)",
                                self._state, elapsed, limit)
                     self._hard_hide()
@@ -272,7 +260,7 @@ class Overlay:
         self.root.after(3000, self._watchdog)
 
     def open_settings(self, client, on_save, suspend_hotkey=None, resume_hotkey=None):
-        # Single-instance: focus the existing dialog instead of stacking a new one.
+        # Only one dialog: focus the open one instead of creating another.
         if self._settings is not None:
             try:
                 if self._settings.win.winfo_exists():
@@ -281,7 +269,7 @@ class Overlay:
                     self._settings.win.focus_force()
                     return
             except (tk.TclError, AttributeError):
-                pass  # stale reference (window already destroyed) — fall through
+                pass  # already destroyed, so create a new one
         self._settings = SettingsDialog(self.root, self.config, client, on_save,
                                         suspend_hotkey=suspend_hotkey, resume_hotkey=resume_hotkey)
 
@@ -359,15 +347,15 @@ class Overlay:
             p = (time.monotonic() - start) / dur
             last = p >= 1.0
             self._reveal = 1.0 if last else _ease_out(p)
-            # Only the reply text's colour changes here — recolour that one item
-            # instead of clearing and rebuilding the whole canvas every frame.
+            # Only the reply colour changes, so recolour that one item instead of
+            # redrawing the canvas.
             try:
                 if self._shown and not self._animating and self._state in (RESPONSE, ERROR):
                     target = TEXT if self._state == RESPONSE else ERROR_COL
                     self.canvas.itemconfigure(
                         self._body_item, fill=_lerp_color(REVEAL_FROM, target, self._reveal))
             except tk.TclError:
-                pass  # item was replaced by a streaming redraw — it carries the colour itself
+                pass  # replaced by a streaming redraw, which sets its own colour
             if not last and self._shown and not self._animating and self._state in (RESPONSE, ERROR):
                 self._reveal_job = self.root.after(16, step)
             else:
@@ -423,9 +411,7 @@ class Overlay:
                 y = c.bbox(item)[3]
         elif st == RESPONSE:
             if self._user_text:
-                # Keep your recognised words visible alongside the reply — same
-                # quoted style as Thinking — so you can confirm you were
-                # understood correctly for as long as the reply is shown.
+                # Keep the recognised words above the reply so the user can check them.
                 item = c.create_text(WIDTH / 2, y, anchor="n", text=f"“{self._user_text}”",
                                      fill=MUTED, font=FONT_USER,
                                      width=WIDTH - 2 * PAD, justify="center")
@@ -453,8 +439,8 @@ class Overlay:
         c.tag_lower(card)
         self._h = h
 
-        # A visible ✕ to abort — a discoverable affordance for the click-anywhere-to-cancel
-        # already wired to _on_click. Only in the states where cancelling means something.
+        # A ✕ in the corner. Clicking anywhere on the popup already cancels
+        # (_on_click); this just makes that visible.
         if st in (LISTENING, THINKING, RESPONSE):
             c.create_text(WIDTH - 15, 13, anchor="ne", text="✕",
                           fill=MUTED, font=("Segoe UI", 14))
@@ -515,12 +501,11 @@ class Overlay:
     # ---- animation ----------------------------------------------------------
 
     def _hold_timer_res(self, ms):
-        """Raise the Windows timer resolution to 1 ms for ~`ms`, then let it drop.
+        """Raise the Windows timer resolution to 1 ms for `ms`, then lower it.
 
-        Default granularity is ~15.6 ms, so a 60 fps `after(16)` tween actually
-        fires at ~23–31 ms and stutters. Idempotent and self-releasing: repeated
-        calls just extend the hold, and a single tracked job always lowers it
-        again, so a mostly-idle tray app isn't pinning the system timer.
+        At the default ~15.6 ms resolution, after(16) fires every 23-31 ms and
+        the animation stutters. Repeated calls extend the hold, and one tracked
+        job always lowers it again, so an idle app doesn't keep it raised.
         """
         try:
             if not self._timer_raised:
@@ -542,9 +527,8 @@ class Overlay:
             pass
 
     def _tween(self, dur_ms, frame, done, ease):
-        # Time-based: progress is read from the wall clock each frame, so a late
-        # frame skips ahead to stay on schedule instead of dragging the whole
-        # animation out (which is what read as "laggy"). Duration self-corrects.
+        # Progress comes from the clock each frame, so a late frame skips ahead
+        # instead of stretching the whole animation.
         self._cancel_slide()
         self._hold_timer_res(dur_ms + 200)
         dur = max(1, dur_ms) / 1000.0
@@ -633,7 +617,7 @@ class Overlay:
         if self._dismiss_job is not None:
             if self._dismiss_at is not None:
                 remaining = self._dismiss_at - time.monotonic()
-                if remaining > 0.05:  # >just the routine self-cleanup when hide() itself fires
+                if remaining > 0.05:  # ignore the routine cancel when hide() itself fires
                     log.info("dismiss interrupted %.2fs early by a new state (was state=%s)",
                              remaining, self._state)
             self._dismiss_at = None

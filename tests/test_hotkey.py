@@ -15,7 +15,7 @@ def _make(mode):
 def test_hold_basic():
     hk, log = _make("hold")
     hk._press(Key.f9)
-    hk._press(Key.f9)   # auto-repeat while held — must not re-fire
+    hk._press(Key.f9)   # auto-repeat while held; must not fire again
     hk._release(Key.f9)
     assert log == ["down", "up"]
 

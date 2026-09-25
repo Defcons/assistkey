@@ -1,11 +1,10 @@
-"""Wake-word listening for AssistKey (openWakeWord — the same engine HA uses).
+"""Optional wake-word listener using openWakeWord (the engine HA uses too).
 
-A background thread continuously runs the mic through an openWakeWord model. On
-detection it fires `on_wake`; the app then pauses this listener (so it doesn't
-fight the utterance for the mic), runs one Assist utterance ended by Home
-Assistant's own voice-activity detection, and resumes the listener afterwards.
+A background thread feeds the mic into an openWakeWord model. On a detection it
+calls `on_wake`; the app then pauses this listener so the utterance can use the
+mic, runs one utterance (ended by HA's voice detection) and resumes it.
 
-Off by default — the user opts in from Settings.
+Off by default; turned on in Settings.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ import sounddevice as sd
 log = logging.getLogger("assistkey.wake")
 
 SAMPLE_RATE = 16000
-FRAME = 1280  # 80 ms at 16 kHz — openWakeWord's expected chunk
+FRAME = 1280  # 80 ms at 16 kHz, the chunk size openWakeWord expects
 
 # Wake words shipped with openWakeWord (model name -> friendly label).
 WAKE_WORDS = [
@@ -42,7 +41,7 @@ class WakeListener:
         self._model = None
         self._loaded_word = None
         self._downloaded = False
-        self._purged_cache = False   # one self-heal purge per session, max
+        self._purged_cache = False   # purge the model cache at most once per session
 
     # ---- lifecycle ----------------------------------------------------------
 
@@ -80,21 +79,17 @@ class WakeListener:
         from openwakeword.model import Model
         from openwakeword.utils import download_models
         if not self._downloaded:
-            # Mark done ONLY on success — else a transient first-enable download
-            # failure would never be retried, and Model() below would then raise
-            # forever (no model files), permanently disabling wake for the session.
+            # Only mark this done on success, so a failed first download is
+            # retried instead of disabling the wake word for the session.
             download_models()  # idempotent; fetches the ~10 MB model set once
             self._downloaded = True
         try:
             self._model = Model(wakeword_models=[word], inference_framework="onnx")
         except Exception:
-            # A crash/power-loss during the FIRST download leaves a truncated
-            # .onnx that passes download_models' exists-check forever — bricking
-            # wake across sessions until someone deletes the file by hand
-            # (openwakeword streams straight to the final filename, no
-            # temp+rename). Self-heal: purge the cache once and re-download on
-            # the next retry pass. A non-file load failure purges/refetches at
-            # most once, then just keeps raising into _run's logged retry.
+            # openwakeword downloads straight to the final filename, so an
+            # interrupted first download leaves a truncated model that passes
+            # its "already downloaded" check forever. Delete the models once and
+            # let the next retry download them again.
             if not self._purged_cache:
                 self._purged_cache = True
                 self._downloaded = False

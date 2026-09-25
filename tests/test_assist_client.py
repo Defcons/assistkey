@@ -6,10 +6,8 @@ from assist_client import AssistClient
 
 
 def test_start_utterance_when_disconnected_emits_done():
-    # Regression: a wake trigger (or key-press) can arrive before HA is connected.
-    # The app pauses wake-word listening around every utterance and only resumes
-    # on ("done",)/("error",). If start_utterance returned silently, wake would
-    # stay paused until restart — so it must emit a terminal ("done",).
+    # A wake trigger or key press can arrive before HA is connected. The app only
+    # resumes the wake word on ("done",)/("error",), so declining must send one.
     emitted = []
     client = AssistClient(cfg.Config(), ui=emitted.append)
     assert client.ws is None
@@ -18,8 +16,8 @@ def test_start_utterance_when_disconnected_emits_done():
 
 
 def test_start_utterance_when_active_stays_silent():
-    # If an utterance is already running, a second start must NOT emit — the
-    # in-flight one owns the terminal ("done",).
+    # With an utterance already running, a second start sends nothing: the running
+    # one sends its own ("done",).
     emitted = []
     client = AssistClient(cfg.Config(), ui=emitted.append)
     client._active = True
@@ -57,7 +55,7 @@ def test_start_utterance_mid_reconnect_notifies_when_interactive():
 
 
 def test_start_utterance_mid_reconnect_silent_for_wake():
-    # A wake false-positive during reconnect should NOT flash a popup, just resync.
+    # A false wake during reconnect shouldn't show a popup, just resync.
     emitted = []
     client = AssistClient(cfg.Config(), ui=emitted.append)
     client.ws = _FakeWS("CLOSED")
@@ -84,9 +82,8 @@ class _HandshakeWS:
 
 
 def test_connect_raises_authfailed_and_closes_socket(monkeypatch):
-    # 2026-09-12 field incident: a server-side token revocation surfaced only as
-    # "RuntimeError" retries. Auth rejection is now its own type so callers can
-    # tell "retrying is pointless" apart from a network blip.
+    # A rejected token gets its own exception type, so callers can tell it apart
+    # from a network error.
     import assist_client as ac
     import pytest
 
@@ -151,8 +148,8 @@ def test_reconnect_auth_failure_sets_flag_and_actionable_status():
 
 
 def test_hotkey_press_during_auth_failure_says_update_token():
-    # A press while auth-dead used to say "Reconnecting to Home Assistant…" —
-    # a lie (retrying can't fix a revoked token). It must say what to DO.
+    # With a rejected token, a key press asks for a new token instead of saying
+    # "Reconnecting…", which retrying could never fix.
     emitted = []
     client = AssistClient(cfg.Config(), ui=emitted.append)
     client._auth_failed = True
@@ -215,8 +212,8 @@ def test_emit_done_suppressed_once_then_resumes(monkeypatch):
 
 
 def test_plain_request_cancel_does_not_suppress_done(monkeypatch):
-    # Tray "Stop" / clicking the popup call request_cancel() with no args — that
-    # must NOT suppress the done signal; the popup should dismiss normally.
+    # Tray "Stop" and clicking the popup call request_cancel() with no args. That
+    # must not suppress ("done",), so the popup dismisses normally.
     import assist_client as ac
     monkeypatch.setattr(ac.sd, "stop", lambda: None)
     emitted = []
@@ -266,11 +263,10 @@ def test_restart_utterance_cancels_with_suppress_and_waits_before_starting():
 
 
 def test_restart_utterance_on_timeout_unarms_suppression_and_skips_noop_start():
-    # If the old utterance is stuck (e.g. a slow TTS fetch sd.stop can't interrupt),
-    # restart must NOT fall through to a start_utterance that would silently no-op
-    # while _active is still True, AND must un-arm the suppression it set — otherwise
-    # the old run's ("done",) is swallowed and wake stays paused forever (audit
-    # 2026-08-27). It cancels, un-arms, and returns; the old run resolves normally.
+    # If the old utterance won't stop (e.g. a slow TTS fetch), restart gives up:
+    # it doesn't call start_utterance (which would do nothing while _active is
+    # set) and it un-arms the suppression, so the old run's ("done",) still gets
+    # through and resumes the wake word.
     order = []
     client = AssistClient(cfg.Config(), ui=lambda _c: None)
     client._active = True
@@ -295,19 +291,17 @@ def test_restart_utterance_on_timeout_unarms_suppression_and_skips_noop_start():
         with mock.patch("asyncio.wait_for", fake_wait_for):
             await client.restart_utterance()
     asyncio.run(run_with_faked_timeout())
-    assert order == [("cancel", True)]           # cancelled, but did NOT no-op-start
+    assert order == [("cancel", True)]           # cancelled, and no pointless start
     assert client._suppress_next_done is False   # un-armed so the old run's done fires
 
 
-# ---- pump() must reconnect on close, never busy-spin (2026-08-27) ---------------
+# ---- pump() must reconnect on close, never busy-spin ----------------------------
 
 class _CleanClosedWS:
-    """Async-iterates to nothing, exactly like a websockets connection closed with
-    a normal 1000 code: __anext__ raises StopAsyncIteration, NOT an exception.
-    (Empirically confirmed against real websockets — see ResearchJournal 2026-08-27.)
-    This is the case that used to make pump() spin at 100% CPU. The `sleep(0)`
-    yields to the loop each pass so that IF the busy-loop regression returns, the
-    test's wait_for timeout fires (a fast failure) instead of hanging forever."""
+    """Iterates to nothing, like a real websockets connection closed with a normal
+    1000 code: __anext__ raises StopAsyncIteration rather than an error. The
+    sleep(0) yields to the loop each pass, so if pump() ever busy-loops again the
+    test's timeout fires instead of the test hanging."""
     def __aiter__(self):
         return self
 
@@ -364,12 +358,9 @@ def test_pump_reconnects_on_error_close():
 
 
 def test_silent_mic_surfaces_error_and_resets_state(monkeypatch):
-    # The reported hang: hold-to-talk with the headset OFF. The device stays active and
-    # delivers SILENT frames (not zero frames), so it used to fall through to HA and sit
-    # in "Thinking…" for seconds before HA's "no text recognized" — and the run then hung
-    # in teardown, wedging _active/_idle so every later hotkey press dead-ended. Now a hold
-    # whose loudest sample is essentially silence is caught on release -> a clear error AND
-    # a clean state reset.
+    # A headset that's switched off still delivers frames, just silent ones. A hold
+    # whose loudest sample is silence must report an error on release and leave
+    # the client ready for the next press.
     import assist_client as ac
 
     class FakeStream:                      # opens fine, delivers digital silence (mic off/muted)
@@ -398,7 +389,7 @@ def test_silent_mic_surfaces_error_and_resets_state(monkeypatch):
         task = asyncio.ensure_future(client.start_utterance())
         await asyncio.sleep(0.05)          # stream opened, event loop entered
         client._release.set()              # user releases the key -> watch_release runs
-        await asyncio.wait_for(task, timeout=5)   # must NOT hang; returns promptly
+        await asyncio.wait_for(task, timeout=5)   # must return promptly, not hang
     asyncio.run(run())
 
     assert any(c[0] == "error" and "microphone" in c[1].lower() for c in emitted), emitted
@@ -408,10 +399,8 @@ def test_silent_mic_surfaces_error_and_resets_state(monkeypatch):
 
 
 def test_pump_disconnect_fails_inflight_routes():
-    # 2026-08-29 audit: when the socket drops, HA loses the in-flight run with it —
-    # no more events will EVER arrive for that msg_id. pump must fail the live
-    # routes immediately, not leave the utterance in "Thinking…" for the 60 s
-    # completion watchdog (wake paused the whole time).
+    # When the socket drops, HA drops the running pipeline too, so pump must fail
+    # the waiting utterance right away rather than leave it to the 60 s timeout.
     client = AssistClient(cfg.Config(), ui=lambda _c: None)
     client.ws = _CleanClosedWS()
     route: asyncio.Queue = asyncio.Queue()
@@ -435,8 +424,8 @@ def test_pump_disconnect_fails_inflight_routes():
 
 
 class _OpenDyingWS:
-    """Passes the _ws_is_open check, then raises on the first send — the socket
-    dying exactly between start_utterance's open-check and the pipeline-run send."""
+    """Passes the _ws_is_open check, then raises on the first send, as if the
+    socket closed between the open check and the pipeline-run send."""
     state = _FakeState("OPEN")
 
     async def send(self, *a):
@@ -462,9 +451,8 @@ class _RecordingStream:
 
 
 def test_setup_send_failure_closes_stream_and_route(monkeypatch):
-    # 2026-08-29 audit (probe-confirmed): if the run-send raises, forward_audio —
-    # the only stream closer — was never created. Without explicit cleanup the mic
-    # stayed HOT (still capturing) forever and the routes entry leaked.
+    # If the run-send raises, forward_audio (which normally closes the stream)
+    # hasn't started, so the mic stream and route must be cleaned up here.
     import assist_client as ac
     monkeypatch.setattr(ac.sd, "RawInputStream", _RecordingStream)
     emitted = []
@@ -521,10 +509,9 @@ def test_disconnected_sentinel_fails_run_with_clear_error(monkeypatch):
 
 
 def test_crash_error_is_suppressed_for_cancelled_run(monkeypatch):
-    # 2026-08-29 audit: the error channel used to be un-suppressible — a crashing
-    # OLD run (bad HA event shape) could emit ("error",) after a barge-in already
-    # started the NEW run, resetting hotkey/wake state mid-gesture (the same race
-    # the done-channel suppression closed). A cancelled run must crash silently.
+    # A cancelled run that then crashes (e.g. an unexpected HA event shape) must
+    # not send ("error",): the next run has already started, and the error would
+    # reset its hotkey and wake state.
     def arrange(client, q):
         client._cancel.set()                                # barge-in already happened
         q.put_nowait({"type": "event",
@@ -547,9 +534,8 @@ def test_crash_error_precedes_done_for_live_run(monkeypatch):
 
 
 def test_request_once_routes_inflight_frames():
-    # 2026-08-29 audit: right after a reconnect, _request_once (load_pipelines)
-    # reads the socket while a fresh utterance may already be running — frames for
-    # other ids must be routed to them, not silently discarded.
+    # Right after a reconnect, _request_once reads the socket while a new
+    # utterance may already be running; messages for other ids must reach it.
     import json as _json
 
     class _FeedWS:
@@ -584,9 +570,7 @@ def test_request_once_routes_inflight_frames():
 
 
 def test_reconnect_backoff_interruptible_by_kick():
-    # 2026-08-29 audit: a Settings save with corrected credentials must cut the
-    # backoff sleep short instead of leaving the user staring at "Disconnected"
-    # for up to 30 s after fixing a typo.
+    # Saving corrected credentials cuts the reconnect backoff short.
     import time as _time
     client = AssistClient(cfg.Config(), ui=lambda _c: None)
     attempts = []
@@ -613,10 +597,8 @@ def test_reconnect_backoff_interruptible_by_kick():
 
 
 def test_play_returns_promptly_on_barge_in_during_fetch(monkeypatch):
-    # The TTS fetch used to be uninterruptible (urlopen in an executor), so a
-    # barge-in during a slow fetch left the utterance stuck at `await self._play`
-    # for up to the whole timeout. Now a barge-in returns _play immediately; the
-    # fetch finishes in the background and skips playback.
+    # A cancel during a slow TTS fetch returns _play right away; the fetch
+    # finishes in the background and skips playback.
     import threading
     import assist_client as ac
 

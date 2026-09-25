@@ -1,10 +1,9 @@
-"""Where AssistKey keeps its user-writable files (config.json, assistkey.log).
+"""Where the app keeps config.json and assistkey.log.
 
-Source run: the source directory. Frozen (PyInstaller one-file) build: the folder
-that CONTAINS AssistKey.exe — deliberately NOT the ephemeral `_MEIPASS` extraction
-dir that `__file__` resolves into inside a frozen build (that dir is wiped on exit,
-so config + logs written there would vanish on every restart). Keeping them next to
-the exe means settings persist and tray → "Open log" finds the file.
+From source that's the source folder. In the PyInstaller one-file build it's the
+folder containing AssistKey.exe. It must not be `__file__`'s folder there: that
+is a temporary extraction dir that is deleted on exit, so settings and logs
+would be lost on every restart.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from pathlib import Path
 
 
 def app_dir() -> Path:
-    """Directory for user files (config, log) — next to the app, writable, persistent."""
+    """Folder for the config and log files, next to the app."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent   # folder holding AssistKey.exe
     return Path(__file__).resolve().parent             # source tree

@@ -1,9 +1,7 @@
-"""The AssistKey settings dialog (customtkinter) + its private widgets.
+"""The settings dialog (customtkinter) and its small helper widgets.
 
-Split out of overlay.py 2026-08-29: the popup overlay is stable, landmine-dense
-animation code that should be touched rarely; this dialog grows with every new
-setting. Keeping them apart means a settings change never opens the popup's
-state machine. Main thread only, like all UI in this app.
+Kept separate from overlay.py so settings changes don't touch the popup's
+animation code. Main thread only, like all UI in this app.
 """
 
 from __future__ import annotations
@@ -95,8 +93,8 @@ class _Tooltip:
 
 
 class _Dropdown(ctk.CTkFrame):
-    """A dark, rounded dropdown that matches the field width (native menus force a
-    white OS border and can't be aligned/left-justified, so we roll our own)."""
+    """A dark, rounded dropdown that matches the field width. Native menus have
+    a white OS border and can't be aligned, so this draws its own."""
 
     def __init__(self, master, values, variable):
         super().__init__(master, fg_color=S_FIELD, corner_radius=10, height=34)
@@ -166,15 +164,11 @@ class _Dropdown(ctk.CTkFrame):
 
 
 class _ScrollBody(tk.Frame):
-    """Fast scroll container: plain tk.Canvas + embedded CTkFrame + a plain tk
-    scrollbar, packed only when scrolling is actually needed.
+    """Scrolling container: a tk.Canvas holding a CTkFrame (`.inner`), with a
+    scrollbar added only when the content doesn't fit.
 
-    Replaces CTkScrollableFrame, which made the dialog take ~3 s to BUILD — its
-    scrollbar's `_draw`/`set` re-enter layout over and over (measured 2026-09-12:
-    ~2.9 s with it, ~0.34 s without, same content — an 8× penalty). This also
-    removes the two reaches into CTk internals the old code needed
-    (`_parent_canvas.bbox`, `_scrollbar.grid_remove`).
-    Content packs into `.inner`; rows keep full width via the canvas-window bind.
+    Used instead of CTkScrollableFrame, which made the dialog take about 3 s to
+    build because its scrollbar keeps re-running layout.
     """
 
     def __init__(self, master, fg_color):
@@ -194,14 +188,11 @@ class _ScrollBody(tk.Frame):
         return self.inner.winfo_reqheight()
 
     def enable_scrolling(self, toplevel):
-        """Add the scrollbar + wheel-scroll — called only when the window is
-        height-capped, so the fits-path never pays for it. The bar is a
-        standalone CTkScrollbar (dark; a plain tk.Scrollbar renders in Windows'
-        native LIGHT theme) built lazily HERE: constructing it costs ~0.3 s,
-        and the 3 s CTkScrollableFrame pathology was that frame's own relayout
-        loop, which this container doesn't have. Wheel binds on the TOPLEVEL:
-        children's bindtags include it, so scrolling works with the pointer
-        anywhere over the dialog."""
+        """Add the scrollbar and mouse-wheel scrolling. Only called when the
+        window is height-capped, since creating the scrollbar takes ~0.3 s.
+        CTkScrollbar because tk.Scrollbar is drawn in Windows' light theme.
+        The wheel is bound on the toplevel, so it works anywhere over the
+        dialog."""
         bar = ctk.CTkScrollbar(self, orientation="vertical", command=self._canvas.yview,
                                width=14, fg_color=self._fg, button_color=S_FIELD,
                                button_hover_color=S_HOVER)
@@ -231,12 +222,9 @@ class SettingsDialog:
 
         win = ctk.CTkToplevel(root)
         self.win = win
-        # Build HIDDEN. Windows maps a Toplevel the moment it's created, but its
-        # content can't paint until this constructor returns to the event loop —
-        # so the user watched a WHITE skeleton assemble for the whole ~0.5 s
-        # widget build (+ CTk's deferred styling). Withdraw now, deiconify at the
-        # bottom once everything is built, styled and positioned: one clean,
-        # complete reveal instead. (Field report 2026-09-12.)
+        # Build hidden. Windows shows a new Toplevel immediately, but nothing is
+        # painted until this constructor returns, so the user would watch a
+        # white window fill in. It's revealed at the end.
         win.withdraw()
         win.title("AssistKey Settings")
         win.configure(fg_color=S_BG)
@@ -244,8 +232,8 @@ class SettingsDialog:
         win.resizable(False, False)
         win.protocol("WM_DELETE_WINDOW", self._cancel)
 
-        # Save/Cancel bar pinned at the BOTTOM (packed first so it stays visible even
-        # when the content is taller than the screen and the body scrolls).
+        # Save/Cancel bar at the bottom, packed first so it stays visible when the
+        # content scrolls.
         br = ctk.CTkFrame(win, fg_color=S_BG)
         br.pack(side="bottom", fill="x", padx=22, pady=(6, 14))
         ctk.CTkButton(br, text="Save", command=self._save, width=100, height=36, corner_radius=10,
@@ -254,8 +242,7 @@ class SettingsDialog:
         ctk.CTkButton(br, text="Cancel", command=self._cancel, width=100, height=36, corner_radius=10,
                       fg_color=S_FIELD, hover_color=S_HOVER, text_color=S_FG).pack(side="right", padx=(0, 8))
 
-        # Scrollable content fills the space above the buttons — keeps the dialog usable
-        # on small screens as it grows (it now exceeds a 1080p work area).
+        # Content goes in a scroll area so the dialog still fits on small screens.
         scroller = _ScrollBody(win, S_BG)
         scroller.pack(side="top", fill="both", expand=True, padx=16, pady=(16, 0))
         body = scroller.inner
@@ -423,8 +410,8 @@ class SettingsDialog:
             tip="Launch AssistKey automatically when you sign in to Windows "
                 "(adds a per-user startup entry; no admin needed).")
 
-        # Size to content, but CAP the height to the monitor work area — then the body
-        # scrolls instead of the Save button falling off the bottom of the screen.
+        # Size to the content, but no taller than the work area; past that the
+        # body scrolls.
         win.update_idletasks()
         area = monitor_workarea_at(*win.winfo_pointerxy())
         if area:
@@ -432,13 +419,13 @@ class SettingsDialog:
         else:
             left, top, right, bottom = 0, 0, win.winfo_screenwidth(), win.winfo_screenheight()
         content_h = scroller.content_height()
-        # Fixed width — a scroll container has no natural width of its own; this
-        # fits the content (same rows as the old ~402 px dialog) plus the scrollbar.
+        # Fixed width: the scroll container has no natural width. This fits the
+        # rows plus the scrollbar.
         w = 416
         desired_h = content_h + br.winfo_reqheight() + 80    # + button bar + paddings + slack
         area_h = (bottom - top) - 48                         # never taller than the work area
         if desired_h <= area_h:
-            h = desired_h           # fits: the scrollbar simply never gets packed
+            h = desired_h           # fits: no scrollbar needed
         else:
             h = area_h              # capped: show the scrollbar + enable wheel scrolling
             scroller.enable_scrolling(win)
@@ -446,15 +433,9 @@ class SettingsDialog:
         y = top + max(20, (bottom - top - h) // 3)
         win.geometry(f"{w}x{h}+{x}+{y}")
 
-        # Two-stage reveal (see the withdraw at the top). Deiconifying straight
-        # from withdraw STILL flashed white boxes: CustomTkinter widgets paint
-        # their dark faces only on <Configure> events with real sizes, and those
-        # are only delivered once the window is MAPPED — so the ~40 draws
-        # trickled in visibly after the map. Map it fully TRANSPARENT instead,
-        # let the event loop deliver every configure/draw while invisible, then
-        # turn opaque via after_idle (fires once that event flood has drained,
-        # nested once so draws queued BY those handlers finish too). A hard
-        # 1 s fallback guarantees no path leaves an invisible dialog around.
+        # CTk widgets only paint after the window is mapped, so map it fully
+        # transparent, let the draws land, then make it opaque. The 1 s timer is
+        # a fallback so the dialog can't stay invisible.
         win.attributes("-alpha", 0.0)
         win.deiconify()
         win.lift()
@@ -549,8 +530,8 @@ class SettingsDialog:
                 ok, msg = asyncio.run(test_credentials(url, token))
             except Exception as exc:  # noqa: BLE001
                 ok, msg = False, str(exc)
-            # The dialog may have been closed (destroyed) while the network test ran;
-            # marshalling back onto a dead window would raise on this worker thread.
+            # The dialog may have closed while the test ran; calling into it then
+            # would raise on this thread.
             try:
                 if self.win.winfo_exists():
                     self.win.after(0, lambda: self.test_result.configure(
