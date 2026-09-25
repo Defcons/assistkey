@@ -817,3 +817,7 @@ Claude co-author trailers on all commits: hiding the AI use would be worse than 
 Found on the way: the README and the Server URL tooltip claimed HTTPS was required
 because "browsers block mic capture over http". False for this app (the mic is recorded
 locally; `_ws_url` maps http to ws). Fixed separately.
+
+**Later the same day:** rewrote the v1.0.0 and v1.0.1 release notes and titles in the same
+plain voice, set the repo About text and topics (home-assistant, voice-assistant,
+push-to-talk, windows, python), and cut v1.0.2 with everything since v1.0.1.
