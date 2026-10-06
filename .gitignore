@@ -26,3 +26,21 @@ _shot*.png
 # OS
 .DS_Store
 Thumbs.db
+
+# Internal working notes, kept local and not published
+/OrientationMap.md
+/NavigationMap.md
+/KnowledgeBase.md
+/ResearchJournal.md
+/ToDo.md
+/Testing.md
+/CodeMap.md
+/CODE-MAP.md
+/docs/NavigationMap.md
+/docs/KnowledgeBase.md
+/docs/ResearchJournal.md
+/docs/ToDo.md
+/docs/Testing.md
+/CLAUDE.md
+/AGENTS.md
+.claude/

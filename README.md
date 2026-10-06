@@ -86,8 +86,6 @@ build.bat
 
 I built AssistKey with a lot of help from Claude Code, Anthropic's AI coding tool,
 and it's credited on the commits. I use the app every day on my own setup.
-`OrientationMap.md` and the `docs/` folder are the working notes we keep while
-developing; you don't need them to use or change the app.
 
 ## License
 
