@@ -596,6 +596,44 @@ def test_reconnect_backoff_interruptible_by_kick():
     assert _time.monotonic() - t0 < 0.6, "kick must cut the 1 s backoff short"
 
 
+def _timed_reconnect(monkeypatch, connected_ago, kick=False):
+    """Run the real _reconnect after a connection that lived `connected_ago` s,
+    with the floor shortened to 0.3 s. Returns how long it took to connect."""
+    import time as _time
+    import assist_client as ac
+    monkeypatch.setattr(ac, "RECONNECT_FLOOR", 0.3)
+    client = AssistClient(cfg.Config(), ui=lambda _c: None)
+    client._connected_at = _time.monotonic() - connected_ago
+
+    async def fake_connect():
+        pass
+
+    async def fake_load():
+        pass
+    client.connect = fake_connect
+    client.load_pipelines = fake_load
+
+    async def run():
+        if kick:
+            client._retry_kick.set()
+        await asyncio.wait_for(client._reconnect(), timeout=2)
+    t0 = _time.monotonic()
+    asyncio.run(run())
+    return _time.monotonic() - t0
+
+
+def test_reconnect_waits_after_a_connection_that_closed_at_once(monkeypatch):
+    assert _timed_reconnect(monkeypatch, connected_ago=0) >= 0.25
+
+
+def test_reconnect_is_immediate_after_a_long_lived_connection(monkeypatch):
+    assert _timed_reconnect(monkeypatch, connected_ago=60) < 0.1
+
+
+def test_reconnect_floor_skipped_on_settings_save(monkeypatch):
+    assert _timed_reconnect(monkeypatch, connected_ago=0, kick=True) < 0.1
+
+
 def test_play_returns_promptly_on_barge_in_during_fetch(monkeypatch):
     # A cancel during a slow TTS fetch returns _play right away; the fetch
     # finishes in the background and skips playback.

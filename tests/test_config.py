@@ -56,3 +56,34 @@ def test_token_encrypted_on_disk(tmp_path, monkeypatch):
     assert "supersecret" not in raw          # plaintext must never hit disk
     assert '"dpapi:' in raw                   # stored as a DPAPI blob
     assert cfg.Config.load().ha_token == "supersecret"   # decrypts back in memory
+
+
+def test_load_wrong_types_fall_back_per_field(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(cfg, "CONFIG_PATH", tmp_path / "config.json")
+    (tmp_path / "config.json").write_text(json.dumps({
+        "ha_url": "http://x:8123",
+        "hotkey": None,
+        "dismiss_seconds": "abc",
+        "wake_enabled": 1,
+        "mic_device": True,
+        "speaker_device": 3,
+        "wake_sensitivity": 1,
+        "pipeline": None,
+    }), encoding="utf-8")
+    c = cfg.Config.load()
+    assert c.ha_url == "http://x:8123"      # good values survive
+    assert c.hotkey == ["f9"]               # bad ones fall back to their defaults
+    assert c.dismiss_seconds == 2.0
+    assert c.wake_enabled is False
+    assert c.mic_device is None
+    assert c.speaker_device == 3
+    assert c.wake_sensitivity == 1          # an int is fine for a float field
+    assert c.pipeline is None
+
+
+def test_load_rejects_list_with_wrong_item_type(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(cfg, "CONFIG_PATH", tmp_path / "config.json")
+    (tmp_path / "config.json").write_text(json.dumps({"hotkey": ["ctrl", 5]}), encoding="utf-8")
+    assert cfg.Config.load().hotkey == ["f9"]

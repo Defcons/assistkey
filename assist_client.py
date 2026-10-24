@@ -52,6 +52,7 @@ COMPLETION_TIMEOUT = 60   # s after release to get run-end before forcing the po
 MAX_RECORD = 120          # s hard cap on recording (protects against a missed key-release)
 CONVERSATION_TTL = 60     # s a conversation_id is reused so follow-ups keep context
 TTS_FETCH_TIMEOUT = 10    # s cap on fetching a TTS clip (a barge-in also unblocks _play early)
+RECONNECT_FLOOR = 2       # s a connection must have lived before reconnecting without a wait
 
 
 def _ws_url(server: str) -> str:
@@ -191,6 +192,7 @@ class AssistClient:
         self._cancel = asyncio.Event()          # barge-in: abort the current run
         self._retry_kick = asyncio.Event()      # cut _reconnect's backoff short (new creds saved)
         self._auth_failed = False               # last connect attempt was auth-REJECTED (not network)
+        self._connected_at = 0.0                # monotonic time of the last successful connect
         self._suppress_next_done = False        # see restart_utterance
         self.pipelines: list[dict] = []
         self.preferred_pipeline: str | None = None
@@ -254,6 +256,7 @@ class AssistClient:
             raise
         self.ws = ws
         self._auth_failed = False
+        self._connected_at = time.monotonic()
         log.info("connected to Home Assistant %s at %s", reply.get("ha_version"), self.server)
         self.ui(("status", f"Connected (HA {reply.get('ha_version')})"))
         self.ui(("connected",))
@@ -321,6 +324,15 @@ class AssistClient:
             await self._reconnect()   # awaits (connect + backoff sleep) -> never spins
 
     async def _reconnect(self):
+        # A server that accepts and then closes at once would otherwise get a
+        # reconnect at connect() speed. A settings save (_retry_kick) skips the wait.
+        wait = RECONNECT_FLOOR - (time.monotonic() - self._connected_at)
+        if wait > 0:
+            try:
+                await asyncio.wait_for(self._retry_kick.wait(), wait)
+            except asyncio.TimeoutError:
+                pass
+        self._retry_kick.clear()
         delay = 1
         while True:
             try:

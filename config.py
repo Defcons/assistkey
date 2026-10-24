@@ -13,6 +13,8 @@ import dataclasses
 import json
 import logging
 import os
+import types
+import typing
 from dataclasses import dataclass, field
 from pynput import keyboard as kb
 
@@ -55,6 +57,23 @@ def hotkey_label(tokens) -> str:
                       for t in parts) or "(none)"
 
 
+def _type_ok(value, hint) -> bool:
+    """True if a JSON value fits a Config field's annotation (str, bool, float,
+    int, None, list[str] and unions of those). An int is accepted for a float."""
+    args = typing.get_args(hint)
+    if isinstance(hint, types.UnionType):
+        return any(_type_ok(value, a) for a in args)
+    if hint is type(None):
+        return value is None
+    if typing.get_origin(hint) is list:
+        return isinstance(value, list) and all(_type_ok(v, args[0]) for v in value)
+    if isinstance(value, bool):
+        return hint is bool  # bool is an int subclass, so check it first
+    if hint is float:
+        return isinstance(value, (int, float))
+    return isinstance(value, hint)
+
+
 @dataclass
 class Config:
     ha_url: str = ""                       # e.g. https://homeassistant.local:8123
@@ -92,8 +111,18 @@ class Config:
         if CONFIG_PATH.exists():
             try:
                 data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-                known = {f for f in cls.__dataclass_fields__}
-                obj = cls(**{k: v for k, v in data.items() if k in known})
+                # A hand-edited value of the wrong type falls back to that field's
+                # default instead of failing later, away from the cause.
+                hints = typing.get_type_hints(cls)
+                kept = {}
+                for k, v in data.items():
+                    if k not in hints:
+                        continue
+                    if _type_ok(v, hints[k]):
+                        kept[k] = v
+                    else:
+                        log.warning("config.json: %s has the wrong type; using the default", k)
+                obj = cls(**kept)
                 obj.ha_token = dpapi.unprotect(obj.ha_token)  # decrypt at rest -> plaintext in memory
                 return obj
             except Exception as exc:  # noqa: BLE001 - corrupt config shouldn't crash startup
