@@ -402,10 +402,10 @@ class AssistClient:
     @staticmethod
     def _wants_follow_up(io: dict, reply_text: str) -> bool:
         """Listen again if HA sets continue_conversation or the reply ends with a
-        question mark. Many agents ask a clarifying question without the flag."""
-        flagged = bool(io.get("continue_conversation")
-                       or io.get("response", {}).get("continue_conversation"))
-        return flagged or reply_text.strip().endswith("?")
+        question mark. Many agents ask a clarifying question without the flag.
+        The flag sits at the top of intent_output, beside response (checked on
+        HA 2026.10.3)."""
+        return bool(io.get("continue_conversation")) or reply_text.strip().endswith("?")
 
     async def start_utterance(self, notify_unavailable: bool = False):
         if self._active:
